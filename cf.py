@@ -41,8 +41,8 @@ class BPRMF:
     only covers SGD (m==1)
     """
     def __init__(self, n_components, init_factor=1e-1, alpha=1e-6, beta=1e+3,
-                 n_epoch=2, optimizer=torch.optim.Adam, dtype=torch.cuda.FloatTensor,
-                 verbose=False):
+                 n_epoch=2, optimizer=torch.optim.Adam,
+                 dtype=torch.cuda.FloatTensor, verbose=False):
         """"""
         self.n_components_ = n_components
         self.n_epoch = n_epoch
@@ -89,7 +89,6 @@ class BPRMF:
         # return np.argsort(r_)[:k][::-1]
         return ind_[:k][::-1]
 
-
     def fit(self, X):
         """"""
         # quick convert
@@ -110,7 +109,7 @@ class BPRMF:
             requires_grad=True
         )
 
-        # preprocess dataset 
+        # preprocess dataset
         Y = self._preproc_data(X)
 
         # init optimizor
@@ -140,18 +139,17 @@ class BPRMF:
 
                     # update
                     opt.step()
-        except KeyboardInterrupt as e:
+        except KeyboardInterrupt:
             print('[Warning] User stopped the training!')
 
 
 if __name__ == "__main__":
     from util import read_data
-    from evaluation import *
+    from evaluation import r_precision, NDCG
     import matplotlib.pyplot as plt
-    from tqdm import tqdm
 
     print('Loading data...')
-    d = read_data('/mnt/bulk/recsys18/playlist_tracks.csv')
+    d = read_data('~/Downloads/playlist_tracks.csv')
     i, j, v = sp.find(d)
     rnd_idx = np.random.choice(len(i), len(i), replace=False)
     bound = int(len(i) * 0.8)
@@ -169,9 +167,11 @@ if __name__ == "__main__":
 
     print('Evaluate!')
     # predict
+    # for efficient, sample 5% of the user to approximate the performance
+    rnd_u = np.random.choice(d.shape[0], int(d.shape[0] * 0.05), replace=False)
     rprec = []
     ndcg = []
-    for u in tqdm(xrange(d.shape[0]), total=d.shape[0], ncols=80):
+    for u in tqdm(rnd_u, total=d.shape[0], ncols=80):
         true = sp.find(dt[u])[1]
         pred = model.predict(u)
 
