@@ -76,7 +76,18 @@ class BPRMF:
 
     def predict(self, u, k=500):
         """"""
-        return np.argsort(self.U[u].matmul(self.V.t()).data.numpy())[:k][::-1]
+        r = self.U[u].matmul(self.V.t())
+        _, ind = torch.sort(r)
+
+        if self.dtype == torch.cuda.FloatTensor:
+            # r_ = r.cpu().data.numpy()  # gpu
+            ind_ = ind.cpu().data.numpy()
+        else:
+            # r_ = r.data.numpy()
+            ind_ = ind.data.numpy()
+
+        # return np.argsort(r_)[:k][::-1]
+        return ind_[:k][::-1]
 
 
     def fit(self, X):
@@ -149,7 +160,7 @@ if __name__ == "__main__":
     d = sp.coo_matrix((v[rnd_idx_trn], (i[rnd_idx_trn], j[rnd_idx_trn])),
                       shape=d.shape)
     dt = sp.coo_matrix((v[rnd_idx_val], (i[rnd_idx_val], j[rnd_idx_val])),
-                       shape=d.shape)
+                       shape=d.shape).tocsr()
 
     print('Fit model!')
     # fit
