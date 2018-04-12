@@ -8,7 +8,7 @@ from tqdm import trange, tqdm
 from prefetch_generator import background
 
 
-@background(max_prefetch=3)
+@background(max_prefetch=10)
 def batch_prep_neg_sampling(X, x_trp, verbose=False, shuffle=True):
     """"""
     rnd_ix = np.random.choice(len(x_trp), len(x_trp), replace=False)
@@ -41,13 +41,15 @@ class BPRMF:
     only covers SGD (m==1)
     """
     def __init__(self, n_components, init_factor=1e-1, alpha=1e-6, beta=1e+3,
-                 n_epoch=2, optimizer=torch.optim.Adam, verbose=False):
+                 n_epoch=2, optimizer=torch.optim.Adam, dtype=torch.cuda.FloatTensor,
+                 verbose=False):
         """"""
         self.n_components_ = n_components
         self.n_epoch = n_epoch
         self.alpha = alpha  # learning rate
         self.beta = beta  # regularization weight
         self.init_factor = init_factor  # init weight
+        self.dtype = dtype
         self.U = None  # u factors (torch variable / (n_u, n_r))
         self.V = None  # i factors (torch variable / (n_i, n_r))
         self.loss_curve = []
@@ -89,11 +91,11 @@ class BPRMF:
 
         # init parameters
         self.U = Variable(
-            torch.randn((self.n_users, r)) * self.init_factor,
+            torch.randn((self.n_users, r)).type(self.dtype) * self.init_factor,
             requires_grad=True
         )
         self.V = Variable(
-            torch.randn((self.n_items, r)) * self.init_factor,
+            torch.randn((self.n_items, r)).type(self.dtype) * self.init_factor,
             requires_grad=True
         )
 
@@ -109,25 +111,26 @@ class BPRMF:
         else:
             N = xrange(self.n_epoch)
 
-        for n in N:
-            for u, i, j in batch_prep_neg_sampling(X, Y, self.verbose,
-                                                   shuffle=True):
+        try:
+            for n in N:
+                for u, i, j in batch_prep_neg_sampling(X, Y, self.verbose,
+                                                       shuffle=True):
+                    # flush grad
+                    opt.zero_grad()
 
-                # flush grad
-                opt.zero_grad()
+                    # forward pass
+                    l = self.forward(u, i, j)
 
-                # forward pass
-                l = self.forward(u, i, j)
+                    # save loss curve
+                    self.loss_curve.append(l.data)
 
-                # save loss curve
-                self.loss_curve.append(l.data)
+                    # backward pass
+                    l.backward()
 
-                # backward pass
-                l.backward()
-
-                # update
-                opt.step()
-
+                    # update
+                    opt.step()
+        except KeyboardInterrupt as e:
+            print('[Warning] User stopped the training!')
 
 
 if __name__ == "__main__":
@@ -137,10 +140,7 @@ if __name__ == "__main__":
     from tqdm import tqdm
 
     print('Loading data...')
-    # d = read_data('./data/ml-100k/u1.base', delimiter='\t')
-    # dt = read_data('./data/ml-100k/u1.test',
-    #                delimiter='\t', shape=d.shape).tocsr()
-    d = read_data('../../../Downloads/playlist_track.csv')
+    d = read_data('/mnt/bulk/recsys18/playlist_tracks.csv')
     i, j, v = sp.find(d)
     rnd_idx = np.random.choice(len(i), len(i), replace=False)
     bound = int(len(i) * 0.8)
@@ -164,7 +164,7 @@ if __name__ == "__main__":
         true = sp.find(dt[u])[1]
         pred = model.predict(u)
 
-        rprec.append(R_precision(true, pred))
+        rprec.append(r_precision(true, pred))
         ndcg.append(NDCG(true, pred))
     rprec = filter(lambda r: r is not None, rprec)
     ndcg = filter(lambda r: r is not None, ndcg)

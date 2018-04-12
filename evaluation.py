@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def R_precision(true, pred):
+def r_precision(true, pred):
     """"""
     numer = len(set(true).intersection(set(pred)))
     denom = len(true)
@@ -23,5 +23,6 @@ def NDCG(true, pred):
     return dcg / float(idcg) if idcg != 0 else None  # undefined
 
 
-
-
+def clicks(true, pred):
+    """"""
+    pass
