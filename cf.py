@@ -1,3 +1,4 @@
+import os
 from scipy import sparse as sp
 import torch
 from torch.autograd import Variable
@@ -5,6 +6,9 @@ from util import sparse2triplet
 import numpy as np
 from tqdm import trange, tqdm
 import fire
+
+import sys
+sys.path.append(os.path.join(os.getcwd(), 'wmf'))
 from wmf import factorize, log_surplus_confidence_matrix
 
 from prefetch_generator import background
@@ -153,13 +157,15 @@ class BPRMF:
 
 class WRMF:
     """"""
-    def __init__(self, n_components, init_factor=1e-1, alpha=1e-3, beta=1e-1,
-                 gamma=10, epsilon=1e-6, n_epoch=10, verbose=False):
+    def __init__(self, n_components, init_factor=1e-2, beta=1e-5,
+                 gamma=1, epsilon=100, n_epoch=5, dtype='float32',
+                 verbose=False):
         """"""
         self.n_components_ = n_components
         self.n_epoch = n_epoch
-        self.alpha = alpha  # learning rate
         self.beta = beta  # regularization weight
+        self.gamma = gamma
+        self.epsilon = epsilon
         self.init_factor = init_factor  # init weight
         self.dtype = dtype
         self.U = None  # u factors (torch variable / (n_u, n_r))
@@ -167,12 +173,18 @@ class WRMF:
         self.loss_curve = []
         self.verbose = verbose
 
+    def predict(self, u, k=500):
+        """"""
+        r = self.U[u].dot(self.V.T)
+        return np.argsort(r)[:k][::-1]
+
     def fit(self, X):
         """"""
+        X = X.tocsr()
         S = log_surplus_confidence_matrix(X, self.gamma, self.epsilon)
         UV = factorize(S, self.n_components_, lambda_reg=self.beta,
                        num_iterations=self.n_epoch, init_std=self.init_factor,
-                       verbose=self.verbose, dtype='float32')
+                       verbose=self.verbose, dtype=self.dtype)
         self.U, self.V = UV
 
 
@@ -196,8 +208,8 @@ def main(data_fn):
 
     print('Fit model!')
     # fit
-    # model = BPRMF(10, alpha=1e-3, beta=1., verbose=True)
-    model = WRMF(10, verbose=True)
+    model = BPRMF(10, alpha=5e-2, beta=1., verbose=True)
+    # model = WRMF(10, verbose=True)
     model.fit(d)
 
     print('Evaluate!')
