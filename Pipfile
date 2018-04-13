@@ -19,7 +19,8 @@ tqdm = "*"
 prefetch-generator = "*"
 pandas = "*"
 fire = "*"
-"34a454a" = {file = "http://download.pytorch.org/whl/cu80/torch-0.3.0-cp27-cp27mu-linux_x86_64.whl"}
+torch = "*"
+# "34a454a" = {file = "http://download.pytorch.org/whl/cu80/torch-0.3.0-cp27-cp27mu-linux_x86_64.whl"}
 
 
 [requires]

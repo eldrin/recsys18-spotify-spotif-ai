@@ -4,8 +4,16 @@ from torch.autograd import Variable
 from util import sparse2triplet
 import numpy as np
 from tqdm import trange, tqdm
+import fire
+from wmf import factorize, log_surplus_confidence_matrix
 
 from prefetch_generator import background
+
+try:
+    print(torch.cuda.current_device())
+    floatX = torch.cuda.FloatTensor
+except:
+    floatX = torch.FloatTensor
 
 
 @background(max_prefetch=10)
@@ -40,9 +48,9 @@ class BPRMF:
     MF based on BPR loss.
     only covers SGD (m==1)
     """
-    def __init__(self, n_components, init_factor=1e-1, alpha=1e-6, beta=1e+3,
+    def __init__(self, n_components, init_factor=1e-1, alpha=1e-2, beta=0.0025,
                  n_epoch=2, optimizer=torch.optim.Adam,
-                 dtype=torch.cuda.FloatTensor, verbose=False):
+                 dtype=floatX, verbose=False):
         """"""
         self.n_components_ = n_components
         self.n_epoch = n_epoch
@@ -143,13 +151,39 @@ class BPRMF:
             print('[Warning] User stopped the training!')
 
 
-if __name__ == "__main__":
+class WRMF:
+    """"""
+    def __init__(self, n_components, init_factor=1e-1, alpha=1e-3, beta=1e-1,
+                 gamma=10, epsilon=1e-6, n_epoch=10, verbose=False):
+        """"""
+        self.n_components_ = n_components
+        self.n_epoch = n_epoch
+        self.alpha = alpha  # learning rate
+        self.beta = beta  # regularization weight
+        self.init_factor = init_factor  # init weight
+        self.dtype = dtype
+        self.U = None  # u factors (torch variable / (n_u, n_r))
+        self.V = None  # i factors (torch variable / (n_i, n_r))
+        self.loss_curve = []
+        self.verbose = verbose
+
+    def fit(self, X):
+        """"""
+        S = log_surplus_confidence_matrix(X, self.gamma, self.epsilon)
+        UV = factorize(S, self.n_components_, lambda_reg=self.beta,
+                       num_iterations=self.n_epoch, init_std=self.init_factor,
+                       verbose=self.verbose, dtype='float32')
+        self.U, self.V = UV
+
+
+def main(data_fn):
+    """"""
     from util import read_data
     from evaluation import r_precision, NDCG
     import matplotlib.pyplot as plt
 
     print('Loading data...')
-    d = read_data('~/Downloads/playlist_tracks.csv')
+    d = read_data(data_fn)
     i, j, v = sp.find(d)
     rnd_idx = np.random.choice(len(i), len(i), replace=False)
     bound = int(len(i) * 0.8)
@@ -162,7 +196,8 @@ if __name__ == "__main__":
 
     print('Fit model!')
     # fit
-    model = BPRMF(10, verbose=True)
+    # model = BPRMF(10, alpha=1e-3, beta=1., verbose=True)
+    model = WRMF(10, verbose=True)
     model.fit(d)
 
     print('Evaluate!')
@@ -171,7 +206,7 @@ if __name__ == "__main__":
     rnd_u = np.random.choice(d.shape[0], int(d.shape[0] * 0.05), replace=False)
     rprec = []
     ndcg = []
-    for u in tqdm(rnd_u, total=d.shape[0], ncols=80):
+    for u in tqdm(rnd_u, total=len(rnd_u), ncols=80):
         true = sp.find(dt[u])[1]
         pred = model.predict(u)
 
@@ -186,3 +221,7 @@ if __name__ == "__main__":
     fig, ax = plt.subplots(1, 1)
     ax.plot(model.loss_curve)
     fig.savefig('./data/loss.png')
+
+
+if __name__ == "__main__":
+    fire.Fire(main)
