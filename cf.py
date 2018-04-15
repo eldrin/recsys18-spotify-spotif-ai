@@ -2,6 +2,7 @@ import os
 from functools import partial
 from scipy import sparse as sp
 import numpy as np
+import copy
 
 import torch
 from torch.autograd import Variable
@@ -470,10 +471,11 @@ class LambdaBPRMF:
         x_ = b_i - b_j + x_ui - x_uj
 
         # calc psi (lambda weight)
-        if int(self.T) in self.psi:
-            psi = self.psi[int(self.T)]
+        T = copy.deepcopy(self.T)
+        if int(T) in self.psi:
+            psi = self.psi[int(T)]
         else:
-            upto = int((self.n_items - 1.) / self.T) + 1
+            upto = int((self.n_items - 1.) / T) + 1
             psi = sum([1./(r+1.) for r in xrange(upto)]) / self.gamma_I
 
         # get grad (calc lambda)
@@ -687,9 +689,9 @@ def main(data_fn):
     print('Fit model!')
     # fit
     # model = BPRMF(10, alpha=0.003, beta=0.001, verbose=True)
-    # model = WRMF(10, beta=1e-1, verbose=True)
+    model = WRMF(10, beta=1e-1, verbose=True)
     # model = BPRMFcpu(10, alpha=0.004, beta=10, n_epoch=2, verbose=True)
-    model = LambdaBPRMF(10, alpha=0.1, beta=0.001, n_epoch=2, verbose=True)
+    # model = LambdaBPRMF(10, alpha=0.1, beta=0.001, n_epoch=2, verbose=True)
     model.fit(d, dt)
 
     print('Evaluate!')
