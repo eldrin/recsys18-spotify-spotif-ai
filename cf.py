@@ -1,4 +1,5 @@
 import os
+from functools import partial
 from scipy import sparse as sp
 import numpy as np
 
@@ -14,7 +15,9 @@ import fire
 
 import sys
 sys.path.append(os.path.join(os.getcwd(), 'wmf'))
-from wmf import factorize, log_surplus_confidence_matrix
+from wmf import factorize
+from wmf import log_surplus_confidence_matrix
+from wmf import linear_surplus_confidence_matrix
 from wmf import recompute_factors_bias
 
 try:
@@ -31,7 +34,7 @@ def sigmoid(x):
 
 @background(max_prefetch=10)
 def batch_prep_neg_sampling(X, x_trp, verbose=False, shuffle=True,
-                            oversampling=1):
+                            oversampling=10):
     """"""
     rnd_ix = np.random.choice(len(x_trp), len(x_trp), replace=False)
 
@@ -49,20 +52,17 @@ def batch_prep_neg_sampling(X, x_trp, verbose=False, shuffle=True,
         u, i = y[0], y[1]
 
         # sample negative sample
-        j = []
         for _ in xrange(oversampling):
             j_ = np.random.choice(X.shape[1])
             pos_i = set(sp.find(X[u])[1])
             while j_ in pos_i:
                 j_ = np.random.choice(X.shape[1])
             yield u, i, j_
-            # j.append((u, i, j_))
 
-        # yield u, i, j
 
 @background(max_prefetch=10)
 def batch_prep_uniform_without_replace(X, x_trp, verbose=False, shuffle=True,
-                                       oversampling=1):
+                                       oversampling=10):
     """"""
     M = X.shape[0]
     N = len(x_trp)  # number of records
@@ -79,7 +79,7 @@ def batch_prep_uniform_without_replace(X, x_trp, verbose=False, shuffle=True,
         if len(i) == 0:
             continue
         pos_i = set(i)
-        i = np.random.choice(i) # positive samples
+        i = np.random.choice(i)  # positive samples
 
         # sample negative sample
         for _ in xrange(oversampling):
@@ -87,6 +87,7 @@ def batch_prep_uniform_without_replace(X, x_trp, verbose=False, shuffle=True,
             while j_ in pos_i:
                 j_ = np.random.choice(X.shape[1])
             yield u, i, j_
+
 
 class BPRMF:
     """
@@ -205,7 +206,7 @@ class BPRMF:
 
                     # # update
                     # opt.step()
-                    self.update(u, i ,j)
+                    self.update(u, i, j)
 
                     if self.verbose:
                         N.set_description(
@@ -252,7 +253,7 @@ class BPRMF_numpy:
 
         L = np.log(1. / (1. + np.e ** (-x_)))
         L -= self.beta * (np.sum(U**2) + np.sum(I**2) + np.sum(J**2))
-        L -= np.sum(self.b_i[i]**2) + np.sum(self.b_i[j]**2)
+        L -= self.beta * .1 * np.sum(self.b_i[i]**2) + np.sum(self.b_i[j]**2)
         return L
 
     def update(self, u, i, j, beta=0.9, gamma=0.99, eps=1e-8):
@@ -378,7 +379,7 @@ class BPRMF_numpy:
                     if val is not None:
                         if self.k % (self.report_every * 1e+2) == 0:
                             rnd_u = np.random.choice(val.shape[0],
-                                                     int(val.shape[0] * 0.01),
+                                                     int(val.shape[0] * 0.05),
                                                      replace=False)
                             rprec = []
                             ndcg = []
@@ -390,7 +391,8 @@ class BPRMF_numpy:
                                 ndcg.append(NDCG(true, pred))
                             rprec = filter(lambda r: r is not None, rprec)
                             ndcg = filter(lambda r: r is not None, ndcg)
-                            self.acc_curve.append((np.mean(rprec), np.mean(ndcg)))
+                            self.acc_curve.append(
+                                (np.mean(rprec), np.mean(ndcg)))
 
                     # update
                     self.update(u, i, j)
@@ -404,7 +406,7 @@ class WRMF:
     """"""
     def __init__(self, n_components, init_factor=1e-1, beta=1e-1,
                  gamma=1, epsilon=1, n_epoch=10, dtype='float32',
-                 verbose=False):
+                 verbose=False, confidence_fn=log_surplus_confidence_matrix):
         """"""
         self.n_components_ = n_components
         self.n_epoch = n_epoch
@@ -412,6 +414,13 @@ class WRMF:
         self.gamma = gamma
         self.epsilon = epsilon
         self.init_factor = init_factor  # init weight
+        self.confidence_fn = confidence_fn
+        if confidence_fn == linear_surplus_confidence_matrix:
+            self.confidence_fn = partial(confidence_fn, alpha=self.gamma)
+        elif confidence_fn == log_surplus_confidence_matrix:
+            self.confidence_fn = partial(
+                confidence_fn, alpha=self.gamma, epsilon=self.epsilon)
+
         self.dtype = dtype
         self.U = None  # u factors (torch variable / (n_u, n_r))
         self.V = None  # i factors (torch variable / (n_i, n_r))
@@ -426,15 +435,13 @@ class WRMF:
     def fit(self, X, val=None):
         """"""
         X = X.tocsr()
-        S = log_surplus_confidence_matrix(X, self.gamma, self.epsilon)
+        S = self.confidence_fn(X)
         UV = factorize(S, self.n_components_, lambda_reg=self.beta,
                        num_iterations=self.n_epoch, init_std=self.init_factor,
                        verbose=self.verbose, dtype=self.dtype)
         self.U_, self.V_ = UV
         self.U = self.U_
         self.V = self.V_
-        # self.b_u = self.U_[:, -1]
-        # self.b_i = self.V_[:, -1]
         self.b_u = None
         self.b_i = None
 
@@ -450,7 +457,7 @@ def main(data_fn):
     d = read_data(data_fn)
     i, j, v = sp.find(d)
     rnd_idx = np.random.choice(len(i), len(i), replace=False)
-    bound = int(len(i) * 0.6)
+    bound = int(len(i) * 0.7)
     rnd_idx_trn = rnd_idx[:bound]
     rnd_idx_val = rnd_idx[bound:]
     d = sp.coo_matrix((v[rnd_idx_trn], (i[rnd_idx_trn], j[rnd_idx_trn])),
@@ -460,15 +467,15 @@ def main(data_fn):
 
     print('Fit model!')
     # fit
-    # model = BPRMF(10, alpha=0.003, beta=0.001, init_factor=1e-2, verbose=True)
-    # model = WRMF(5, verbose=True)
-    model = BPRMF_numpy(10, alpha=0.3, beta=0.25, verbose=True)
+    # model = BPRMF(10, alpha=0.003, beta=0.001, verbose=True)
+    # model = WRMF(10, beta=1e-1, verbose=True)
+    model = BPRMF_numpy(10, alpha=0.004, beta=10, n_epoch=2, verbose=True)
     model.fit(d, dt)
 
     print('Evaluate!')
     # predict
     # for efficient, sample 5% of the user to approximate the performance
-    rnd_u = np.random.choice(d.shape[0], int(d.shape[0] * 0.05), replace=False)
+    rnd_u = np.random.choice(d.shape[0], int(d.shape[0] * 0.1), replace=False)
     rprec = []
     ndcg = []
     for u in tqdm(rnd_u, total=len(rnd_u), ncols=80):
@@ -504,6 +511,7 @@ def main(data_fn):
         fig, ax = plt.subplots(1, 1)
         ax.plot(map(lambda x: x[1], model.acc_curve), 'x')
         fig.savefig('./data/ndcg.png')
+
 
 if __name__ == "__main__":
     fire.Fire(main)
