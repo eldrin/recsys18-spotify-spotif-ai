@@ -20,6 +20,7 @@ prefetch-generator = "*"
 pandas = "*"
 fire = "*"
 torch = "*"
+sklearn = "*"
 # "34a454a" = {file = "http://download.pytorch.org/whl/cu80/torch-0.3.0-cp27-cp27mu-linux_x86_64.whl"}
 
 

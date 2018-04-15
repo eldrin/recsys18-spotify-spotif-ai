@@ -7,6 +7,7 @@ from torch.autograd import Variable
 
 from prefetch_generator import background
 from util import sparse2triplet
+from evaluation import r_precision, NDCG
 
 from tqdm import trange, tqdm
 import fire
@@ -14,6 +15,7 @@ import fire
 import sys
 sys.path.append(os.path.join(os.getcwd(), 'wmf'))
 from wmf import factorize, log_surplus_confidence_matrix
+from wmf import recompute_factors_bias
 
 try:
     print(torch.cuda.current_device())
@@ -28,7 +30,8 @@ def sigmoid(x):
 
 
 @background(max_prefetch=10)
-def batch_prep_neg_sampling(X, x_trp, verbose=False, shuffle=True):
+def batch_prep_neg_sampling(X, x_trp, verbose=False, shuffle=True,
+                            oversampling=1):
     """"""
     rnd_ix = np.random.choice(len(x_trp), len(x_trp), replace=False)
 
@@ -46,15 +49,20 @@ def batch_prep_neg_sampling(X, x_trp, verbose=False, shuffle=True):
         u, i = y[0], y[1]
 
         # sample negative sample
-        j = np.random.choice(X.shape[1])
-        pos_i = set(sp.find(X[u])[1])
-        while j in pos_i:
-            j = np.random.choice(X.shape[1])
+        j = []
+        for _ in xrange(oversampling):
+            j_ = np.random.choice(X.shape[1])
+            pos_i = set(sp.find(X[u])[1])
+            while j_ in pos_i:
+                j_ = np.random.choice(X.shape[1])
+            yield u, i, j_
+            # j.append((u, i, j_))
 
-        yield u, i, j
+        # yield u, i, j
 
 @background(max_prefetch=10)
-def batch_prep_uniform_without_replace(X, x_trp, verbose=False, shuffle=True):
+def batch_prep_uniform_without_replace(X, x_trp, verbose=False, shuffle=True,
+                                       oversampling=1):
     """"""
     M = X.shape[0]
     N = len(x_trp)  # number of records
@@ -67,15 +75,18 @@ def batch_prep_uniform_without_replace(X, x_trp, verbose=False, shuffle=True):
     for n in it:
         # select user
         u = np.random.choice(M)
-        i = np.random.choice(sp.find(X[u])[1]) # positive samples
+        i = sp.find(X[u])[1]
+        if len(i) == 0:
+            continue
+        pos_i = set(i)
+        i = np.random.choice(i) # positive samples
 
         # sample negative sample
-        j = np.random.choice(X.shape[1])
-        pos_i = set(sp.find(X[u])[1])
-        while j in pos_i:
-            j = np.random.choice(X.shape[1])
-
-        yield u, i, j
+        for _ in xrange(oversampling):
+            j_ = np.random.choice(X.shape[1])
+            while j_ in pos_i:
+                j_ = np.random.choice(X.shape[1])
+            yield u, i, j_
 
 class BPRMF:
     """
@@ -221,34 +232,42 @@ class BPRMF_numpy:
         self.U = None  # u factors (torch variable / (n_u, n_r))
         self.V = None  # i factors (torch variable / (n_i, n_r))
         self.loss_curve = []
+        self.acc_curve = []
         self.report_every = report_every
         self.verbose = verbose
 
     def predict(self, u, k=500):
         """"""
-        r = self.U[u].dot(self.V.T)
+        r = self.U[u].dot(self.V.T) + self.b_i
         return np.argsort(r)[::-1][:k]
 
     def forward(self, u, i, j):
         """"""
         U, I, J = self.U[u], self.V[i], self.V[j]
+        b_i = self.b_i[i]
+        b_j = self.b_i[j]
         x_ui = np.inner(U, I)
         x_uj = np.inner(U, J)
-        x_ = x_ui - x_uj
+        x_ = b_i - b_j + x_ui - x_uj
 
-        L = -np.log(sigmoid(x_))
-        L += self.beta * (np.sum(U**2) + np.sum(I**2) + np.sum(J**2))
+        L = np.log(1. / (1. + np.e ** (-x_)))
+        L -= self.beta * (np.sum(U**2) + np.sum(I**2) + np.sum(J**2))
+        L -= np.sum(self.b_i[i]**2) + np.sum(self.b_i[j]**2)
         return L
 
     def update(self, u, i, j, beta=0.9, gamma=0.99, eps=1e-8):
         """"""
         U, I, J = self.U[u], self.V[i], self.V[j]
+        b_i = self.b_i[i]
+        b_j = self.b_i[j]
         x_ui = np.inner(U, I)
         x_uj = np.inner(U, J)
-        x_ = x_ui - x_uj
+        x_ = b_i - b_j + x_ui - x_uj
 
         # get grad
         a = 1. / (1. + np.e ** (x_))
+        di = a - self.beta * b_i
+        dj = -a - self.beta * b_j
         dU = a * (I - J) - self.beta * U
         dI = a * U - self.beta * I
         dJ = a * (-U) - self.beta * J
@@ -257,10 +276,14 @@ class BPRMF_numpy:
         # self.U_m[u] = self.U_m[u] * beta + (1 - beta) * dU
         # self.V_m[i] = self.V_m[i] * beta + (1 - beta) * dI
         # self.V_m[j] = self.V_m[j] * beta + (1 - beta) * dJ
+        # self.b_m[i] = self.b_m[i] * beta + (1 - beta) * di
+        # self.b_m[j] = self.b_m[j] * beta + (1 - beta) * dj
 
         # self.U_v[u] = self.U_v[u] * gamma + (1 - gamma) * dU**2
         # self.V_v[i] = self.V_v[i] * gamma + (1 - gamma) * dI**2
         # self.V_v[j] = self.V_v[j] * gamma + (1 - gamma) * dJ**2
+        # self.b_v[i] = self.b_v[i] * gamma + (1 - gamma) * di**2
+        # self.b_v[j] = self.b_v[j] * gamma + (1 - gamma) * dj**2
 
         # # computing bias-corrected moment
         # U_m_corrected = self.U_m[u] / (1.-(beta ** self.k))
@@ -272,19 +295,31 @@ class BPRMF_numpy:
         # J_m_corrected = self.V_m[j] / (1.-(beta ** self.k))
         # J_v_corrected = self.V_v[j] / (1.-(gamma ** self.k))
 
+        # i_m_corrected = self.b_m[i] / (1.-(beta ** self.k))
+        # i_v_corrected = self.b_v[i] / (1.-(gamma ** self.k))
+
+        # j_m_corrected = self.b_m[j] / (1.-(beta ** self.k))
+        # j_v_corrected = self.b_v[j] / (1.-(gamma ** self.k))
+
         # # update
         # U_update = U_m_corrected / (np.sqrt(U_v_corrected) + eps)
         # I_update = I_m_corrected / (np.sqrt(I_v_corrected) + eps)
         # J_update = J_m_corrected / (np.sqrt(J_v_corrected) + eps)
+        # i_update = i_m_corrected / (np.sqrt(i_v_corrected) + eps)
+        # j_update = j_m_corrected / (np.sqrt(j_v_corrected) + eps)
 
-        # self.U[u] = self.U[u] - self.alpha * U_update
-        # self.V[i] = self.V[i] - self.alpha * I_update
-        # self.V[j] = self.V[j] - self.alpha * J_update
+        # self.U[u] = self.U[u] + self.alpha * U_update
+        # self.V[i] = self.V[i] + self.alpha * I_update
+        # self.V[j] = self.V[j] + self.alpha * J_update
+        # self.b_i[i] = self.b_i[i] + self.alpha * .1 * i_update
+        # self.b_i[j] = self.b_i[j] + self.alpha * .1 * j_update
 
         # SGD
-        self.U[u] = self.U[u].copy() + self.alpha * dU
-        self.V[i] = self.V[i].copy() + self.alpha * dI
-        self.V[j] = self.V[j].copy() + self.alpha * dJ
+        self.b_i[i] += self.alpha * di
+        self.b_i[j] += self.alpha * dj
+        self.U[u] += self.alpha * dU
+        self.V[i] += self.alpha * dI
+        self.V[j] += self.alpha * dJ
 
     def _preproc_data(self, X):
         """ unwrap sparse matrix X into triplets """
@@ -293,7 +328,7 @@ class BPRMF_numpy:
 
         return Y
 
-    def fit(self, X):
+    def fit(self, X, val=None):
         """"""
         # quick convert
         X = X.tocsr()
@@ -304,10 +339,13 @@ class BPRMF_numpy:
         r = self.n_components_
 
         # init parameters
+        self.b_u = None
+        self.b_i = np.zeros(self.n_items)
         self.U = np.random.randn(self.n_users, r) * self.init_factor
         self.V = np.random.randn(self.n_items, r) * self.init_factor
         self.U_m, self.U_v = np.zeros(self.U.shape), np.zeros(self.U.shape)
         self.V_m, self.V_v = np.zeros(self.V.shape), np.zeros(self.V.shape)
+        self.b_m, self.b_v = np.zeros(self.n_items), np.zeros(self.n_items)
 
         # preprocess dataset
         Y = self._preproc_data(X)
@@ -321,8 +359,6 @@ class BPRMF_numpy:
         self.k = 1
         try:
             for n in N:
-                # for u, i, j in batch_prep_neg_sampling(X, Y, self.verbose,
-                #                                        shuffle=True):
                 for u, i, j in batch_prep_uniform_without_replace(X, Y,
                                                                   self.verbose,
                                                                   shuffle=True):
@@ -339,6 +375,23 @@ class BPRMF_numpy:
                                 '[loss : {:.4f}]'.format(l)
                             )
 
+                    if val is not None:
+                        if self.k % (self.report_every * 1e+2) == 0:
+                            rnd_u = np.random.choice(val.shape[0],
+                                                     int(val.shape[0] * 0.01),
+                                                     replace=False)
+                            rprec = []
+                            ndcg = []
+                            for u_ in rnd_u:
+                                true = sp.find(val[u_])[1]
+                                pred = self.predict(u_, k=500)
+
+                                rprec.append(r_precision(true, pred))
+                                ndcg.append(NDCG(true, pred))
+                            rprec = filter(lambda r: r is not None, rprec)
+                            ndcg = filter(lambda r: r is not None, ndcg)
+                            self.acc_curve.append((np.mean(rprec), np.mean(ndcg)))
+
                     # update
                     self.update(u, i, j)
                     self.k += 1
@@ -349,8 +402,8 @@ class BPRMF_numpy:
 
 class WRMF:
     """"""
-    def __init__(self, n_components, init_factor=1e-3, beta=1e-1,
-                 gamma=1, epsilon=1, n_epoch=5, dtype='float32',
+    def __init__(self, n_components, init_factor=1e-1, beta=1e-1,
+                 gamma=1, epsilon=1, n_epoch=10, dtype='float32',
                  verbose=False):
         """"""
         self.n_components_ = n_components
@@ -370,20 +423,25 @@ class WRMF:
         r = self.U[u].dot(self.V.T)
         return np.argsort(r)[::-1][:k]
 
-    def fit(self, X):
+    def fit(self, X, val=None):
         """"""
         X = X.tocsr()
         S = log_surplus_confidence_matrix(X, self.gamma, self.epsilon)
         UV = factorize(S, self.n_components_, lambda_reg=self.beta,
                        num_iterations=self.n_epoch, init_std=self.init_factor,
                        verbose=self.verbose, dtype=self.dtype)
-        self.U, self.V = UV
+        self.U_, self.V_ = UV
+        self.U = self.U_
+        self.V = self.V_
+        # self.b_u = self.U_[:, -1]
+        # self.b_i = self.V_[:, -1]
+        self.b_u = None
+        self.b_i = None
 
 
 def main(data_fn):
     """"""
     from util import read_data
-    from evaluation import r_precision, NDCG
     import matplotlib.pyplot as plt
 
     print('Loading data...')
@@ -392,7 +450,7 @@ def main(data_fn):
     d = read_data(data_fn)
     i, j, v = sp.find(d)
     rnd_idx = np.random.choice(len(i), len(i), replace=False)
-    bound = int(len(i) * 0.8)
+    bound = int(len(i) * 0.6)
     rnd_idx_trn = rnd_idx[:bound]
     rnd_idx_val = rnd_idx[bound:]
     d = sp.coo_matrix((v[rnd_idx_trn], (i[rnd_idx_trn], j[rnd_idx_trn])),
@@ -402,10 +460,10 @@ def main(data_fn):
 
     print('Fit model!')
     # fit
-    model = BPRMF(10, alpha=0.003, beta=0.001, init_factor=1e-2, verbose=True)
-    # model = WRMF(10, verbose=True)
-    # model = BPRMF_numpy(10, alpha=0.003, beta=0.001, init_factor=1e-2, verbose=True)
-    model.fit(d)
+    # model = BPRMF(10, alpha=0.003, beta=0.001, init_factor=1e-2, verbose=True)
+    # model = WRMF(5, verbose=True)
+    model = BPRMF_numpy(10, alpha=0.3, beta=0.25, verbose=True)
+    model.fit(d, dt)
 
     print('Evaluate!')
     # predict
@@ -425,10 +483,27 @@ def main(data_fn):
     print('R Precision: {:.4f}'.format(np.mean(rprec)))
     print('NDCG: {:.4f}'.format(np.mean(ndcg)))
 
+    print('Save models!')
+    np.save('./data/bpr_U.npy', model.U)
+    np.save('./data/bpr_V.npy', model.V)
+
+    if model.b_i is not None:
+        np.save('./data/bpr_b_i.npy', model.b_i)
+    if model.b_u is not None:
+        np.save('./data/bpr_b_u.npy', model.b_u)
+
     fig, ax = plt.subplots(1, 1)
-    ax.plot(model.loss_curve)
+    ax.plot(model.loss_curve, 'x')
     fig.savefig('./data/loss.png')
 
+    if hasattr(model, 'acc_curve'):
+        fig, ax = plt.subplots(1, 1)
+        ax.plot(map(lambda x: x[0], model.acc_curve), 'x')
+        fig.savefig('./data/rprec.png')
+
+        fig, ax = plt.subplots(1, 1)
+        ax.plot(map(lambda x: x[1], model.acc_curve), 'x')
+        fig.savefig('./data/ndcg.png')
 
 if __name__ == "__main__":
     fire.Fire(main)
