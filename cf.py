@@ -755,10 +755,10 @@ class FactorizationMachine:
         m = self.n_users
 
         b = self.w0
-        wx = self.w[u] + self.w[i]
+        wx = self.w[u] + self.w[i+m]
         vvxx = (
-            (self.v[u] + self.v[i])**2 -
-            (self.v[u]**2 + self.v[i]**2)
+            (self.v[u] + self.v[i+m])**2 -
+            (self.v[u]**2 + self.v[i+m]**2)
         ).sum(dim=-1) * .5
         return b + wx + vvxx
 
@@ -768,6 +768,13 @@ class FactorizationMachine:
         out = np.zeros((self.n_items,))
         for i in xrange(self.n_items):
             out[i] = self.predict_ui(u, i)
+        # out = []
+        # m = range(self.n_items)
+        # for k in xrange(0, self.n_items, self.batch_size):
+        #     mm = m[slice(k, k + self.batch_size)]
+        #     uu = [u] * len(mm)
+        #     out.append(self.predict_ui(mm, uu))
+        # out = np.concatenate(out)
         return np.argsort(out.ravel())[::-1][:k]
 
     def forward(self, x, y, c=None, criterion='ce'):
