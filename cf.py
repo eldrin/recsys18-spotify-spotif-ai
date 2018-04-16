@@ -100,6 +100,56 @@ def batch_prep_uniform_without_replace(X, x_trp, verbose=False, shuffle=True,
             yield u, i, j_
 
 
+@background(max_prefetch=10)
+def batch_prep_fm(X, x_trp, batch_size=64,
+                  verbose=False, shuffle=True):
+    """"""
+    M = X.shape[0]
+    N = len(x_trp)  # number of records
+
+    if verbose:
+        it = tqdm(xrange(N), total=N, ncols=80)
+    else:
+        it = xrange(N)
+
+    for n in it:
+        trp = []
+        y = []
+        c = []  # confidence for weighting loss
+        k = 0
+        for _ in xrange(batch_size):
+            # select user
+            u = np.random.choice(M)
+            i = sp.find(X[u])[1]
+            if len(i) == 0:
+                continue
+            pos_i = set(i)
+            i = np.random.choice(i)  # positive samples
+
+            trp.extend([(2 * k, u, 1), (2 * k, i + M, 1)])
+            y.append(1)
+            c.append(X[u, i])
+
+            # sample negative sample
+            j = np.random.choice(X.shape[1])
+            while j in pos_i:
+                j = np.random.choice(X.shape[1])
+
+            trp.extend([(2 * k + 1, u, 1), (2 * k + 1, j + M, 1)])
+            y.append(0)
+            c.append(X[u, j])
+            k += 1
+
+        # make batch with sparse matrix
+        x = sp.coo_matrix(
+            (map(lambda r: r[2], trp),
+             (map(lambda r: r[0], trp),
+              map(lambda r: r[1], trp))),
+             shape=(len(y), sum(X.shape))
+        )
+        yield x, y, c
+
+
 class BPRMF:
     """
     MF based on BPR loss.
@@ -667,6 +717,137 @@ class WRMF:
         self.b_i = None
 
 
+class FactorizationMachine:
+    """"""
+    def __init__(self, n_components, alpha=1e-3, beta=1e-1, batch_size=64,
+                 n_epoch=2, init_factor=1e-1, optimizer=torch.optim.Adam,
+                 dtype=floatX, verbose=True):
+        """"""
+        self.n_components_ = n_components
+        self.alpha = alpha
+        self.beta = beta
+        self.init_factor = init_factor
+        self.batch_size = batch_size
+        self.n_epoch = n_epoch
+        self.dtype = dtype
+        self.optimizer = optimizer
+        self.verbose = verbose
+        self.loss_curve = []
+        self.acc_curve = []
+
+    def predict(self, x):
+        """"""
+        b = self.w0
+        wx = x.mm(self.w)
+        vvxx = (
+            torch.sum((self.v.unsqueeze(0) * x.unsqueeze(-1))**2, dim=1) -
+            torch.sum(self.v.unsqueeze(0)**2 * (x**2).unsqueeze(-1), dim=1)
+        ).sum(dim=-1) * .5
+        return b + wx + vvxx
+
+    def predict_k(self, u, k=500):
+        """"""
+        # build input
+        trp = []
+        for i in xrange(self.n_items):
+            trp.extend([
+                (0, u, 1), (0, i + self.n_users, 1)
+            ])
+        x = Variable(torch.FloatTensor(sp.coo_matrix(
+            (map(lambda r: r[2], trp),
+             (map(lambda r: r[0], trp),
+              map(lambda r: r[1], trp))),
+             shape=(1, self.n_items + self.n_users)
+        ).toarray()))
+        return np.argsort(self.predict(x).data.numpy().ravel())[::-1][:k]
+
+
+    def forward(self, x, y):
+        """"""
+        y_ = self.predict(x)
+        L = torch.sum(y - y_)**2
+        # L += self.beta * ((self.w0**2).sum() + (self.w**2).sum() + (self.v**2).sum())
+        return L
+
+    def _preproc_data(self, X):
+        """ unwrap sparse matrix X into triplets """
+        Y = sparse2triplet(X)  # implement data processing
+        # check zero columns and zero rows and make dummy factors
+
+        return Y
+
+    def fit(self, X, val=None):
+        """"""
+        # quick convert
+        X = X.tocsr()
+
+        # setup relevant hyper params
+        self.n_users = X.shape[0]
+        self.n_items = X.shape[1]
+        r = self.n_components_
+
+        # init parameters
+        self.w0 = Variable(
+            torch.zeros((1,)).type(self.dtype) * self.init_factor,
+            requires_grad=True
+        )
+        self.w = Variable(
+            torch.zeros(
+                (self.n_users + self.n_items, 1)
+            ).type(self.dtype),
+            requires_grad=True
+        )
+        self.v = Variable(
+            torch.randn(
+                (self.n_users + self.n_items, r)
+            ).type(self.dtype) * self.init_factor,
+            requires_grad=True
+        )
+
+        # preprocess dataset
+        Y = self._preproc_data(X)
+
+        # init optimizor
+        opt = self.optimizer([self.w0, self.w, self.v], lr=self.alpha)
+
+        # training loop
+        if self.verbose:
+            N = trange(self.n_epoch, ncols=80)
+        else:
+            N = xrange(self.n_epoch)
+
+        try:
+            for n in N:
+                for x, y, c in batch_prep_fm(X, Y, batch_size=self.batch_size,
+                                             verbose=self.verbose):
+
+                    # cast to pytorch variable 
+                    x = Variable(torch.FloatTensor(x.toarray()).type(self.dtype))
+                    y = Variable(torch.FloatTensor(y).type(self.dtype))
+
+                    # flush grad
+                    opt.zero_grad()
+
+                    # forward pass
+                    l = self.forward(x, y)
+
+                    # save loss curve
+                    self.loss_curve.append(l.data)
+
+                    # backward pass
+                    l.backward()
+
+                    # update
+                    opt.step()
+
+                    if self.verbose:
+                        N.set_description(
+                            '[loss : {:.4f}]'.format(l.data.numpy().item())
+                        )
+        except KeyboardInterrupt:
+            print('[Warning] User stopped the training!')
+
+
 def main(data_fn):
     """"""
     from util import read_data
@@ -689,9 +870,11 @@ def main(data_fn):
     print('Fit model!')
     # fit
     # model = BPRMF(10, alpha=0.003, beta=0.001, verbose=True)
-    model = WRMF(10, beta=1e-1, verbose=True)
+    # model = WRMF(10, beta=1e-1, verbose=True)
     # model = BPRMFcpu(10, alpha=0.004, beta=10, n_epoch=2, verbose=True)
-    # model = LambdaBPRMF(10, alpha=0.1, beta=0.001, n_epoch=2, verbose=True)
+    # model = LambdaBPRMF(10, alpha=0.005, beta=5, n_epoch=2, verbose=True)
+    model = FactorizationMachine(10, alpha=1e-2, beta=10, n_epoch=1,
+                                 verbose=True)
     model.fit(d, dt)
 
     print('Evaluate!')
@@ -712,14 +895,14 @@ def main(data_fn):
     print('R Precision: {:.4f}'.format(np.mean(rprec)))
     print('NDCG: {:.4f}'.format(np.mean(ndcg)))
 
-    print('Save models!')
-    np.save('./data/bpr_U.npy', model.U)
-    np.save('./data/bpr_V.npy', model.V)
+    # print('Save models!')
+    # np.save('./data/bpr_U.npy', model.U)
+    # np.save('./data/bpr_V.npy', model.V)
 
-    if model.b_i is not None:
-        np.save('./data/bpr_b_i.npy', model.b_i)
-    if model.b_u is not None:
-        np.save('./data/bpr_b_u.npy', model.b_u)
+    # if model.b_i is not None:
+    #     np.save('./data/bpr_b_i.npy', model.b_i)
+    # if model.b_u is not None:
+    #     np.save('./data/bpr_b_u.npy', model.b_u)
 
     fig, ax = plt.subplots(1, 1)
     ax.plot(model.loss_curve, 'x')
