@@ -6,38 +6,15 @@ import matplotlib.pyplot as plt
 
 from util import read_data
 from cf import WRMF
-from evaluation import r_precision, NDCG
+from evaluation import Evaluator
 
 from tqdm import tqdm
 import fire
 
 
-def evaluate(model, dt, cutoff, user_frac=0.05):
-    """"""
-    # for efficiency, sample 5% of the user to approximate the performance
-    rnd_u = np.random.choice(
-        dt.shape[0], int(dt.shape[0] * user_frac), replace=False)
-    rprec = []
-    ndcg = []
-    for u in rnd_u:
-        true = sp.find(dt[u])[1]
-        pred = model.predict_k(u, k=cutoff)
-
-        rprec.append(r_precision(true, pred))
-        ndcg.append(NDCG(true, pred))
-    rprec = filter(lambda r: r is not None, rprec)
-    ndcg = filter(lambda r: r is not None, ndcg)
-
-    out = {
-        'NDCG': ndcg,
-        'R_Precision': rprec,
-    }
-    return out
-
-
 def main(data_fn, attr_fn=None, out_fn=None, cutoff=500, test_ratio=0.7,
-         beta=[1e-4, 1e-3, 1e-2, 1e-1, 1, 10],
-         r=[5, 10, 20, 40, 100, 200], n_epoch=10):
+         beta=[1e-3, 1e-2, 1e-1, 1, 10],
+         r=[10, 20, 40], n_epoch=10):
     """"""
     print('Loading data...')
     d = read_data(data_fn)
@@ -55,6 +32,9 @@ def main(data_fn, attr_fn=None, out_fn=None, cutoff=500, test_ratio=0.7,
     else:
         a = None
 
+    # launch evaluator
+    evalator = Evaluator()
+
     result = []
     print('Fit model!')
     for r_ in tqdm(r, ncols=80):
@@ -62,12 +42,22 @@ def main(data_fn, attr_fn=None, out_fn=None, cutoff=500, test_ratio=0.7,
             model = WRMF(r_, beta=b_, n_epoch=n_epoch)
             model.fit(d, a, dt)
 
-            res = evaluate(model, dt, cutoff)
+            res = evaluator.run(model, dt, a, eval_by='artist')
             result.append({
                 'r': r_, 'beta': b_,
                 'ndcg': res['NDCG'],
-                'rprec': res['R_Precision'],
-                'attr': True if attr_fn is not None else False
+                'rprec': res['r_precision'],
+                'n_epoch': n_epoch,
+                'by':'artist'
+            })
+
+            res = evaluator.run(model, dt, a, eval_by='track')
+            result.append({
+                'r': r_, 'beta': b_,
+                'ndcg': res['NDCG'],
+                'rprec': res['r_precision'],
+                'n_epoch': n_epoch,
+                'by':'track'
             })
 
     if out_fn is not None:

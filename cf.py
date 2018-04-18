@@ -938,10 +938,10 @@ def main(data_fn, attr_fn=None):
     print('Fit model!')
     # fit
     # model = BPRMF(10, alpha=0.003, beta=0.001, verbose=True)
-    model = WRMF(20, beta=1e-1, n_epoch=10, verbose=True)
+    # model = WRMF(20, beta=1e-1, n_epoch=10, verbose=True)
     # model = BPRMFcpu(10, alpha=1e-1, beta=1, n_epoch=2, verbose=True)
     # model = LambdaBPRMF(10, alpha=0.005, beta=5, n_epoch=2, verbose=True)
-    # model = FactorizationMachine(10, alpha=1e-2, beta=0.5, batch_size=8, verbose=True)
+    model = FactorizationMachine(10, alpha=1e-2, beta=0.5, batch_size=256, verbose=True)
 
     if attr_fn is not None:
         model.fit(d, a, dt)
