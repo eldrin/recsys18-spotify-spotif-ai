@@ -52,7 +52,7 @@ class Evaluator:
             return all_sngs
 
     def run(self, model, Xt, A=None, eval_by='track',
-            measures=[NECG, r_precision]):
+            measures=[NDCG, r_precision]):
         """"""
         assert eval_by in {'track', 'artist'}
         assert self.eval_by == 'artist' and A is None
