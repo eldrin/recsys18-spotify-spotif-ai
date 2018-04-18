@@ -16,7 +16,7 @@ import fire
 
 import sys
 sys.path.append(os.path.join(os.getcwd(), 'wmf'))
-from wmf import factorize
+from wmf import factorize, cofactorize
 from wmf import log_surplus_confidence_matrix
 from wmf import linear_surplus_confidence_matrix
 from wmf import recompute_factors_bias
@@ -73,7 +73,7 @@ def batch_prep_neg_sampling(X, x_trp, verbose=False, shuffle=True,
 
 @background(max_prefetch=10)
 def batch_prep_uniform_without_replace(X, x_trp, verbose=False, shuffle=True,
-                                       oversampling=10):
+                                       oversampling=1):
     """"""
     M = X.shape[0]
     N = len(x_trp)  # number of records
@@ -101,7 +101,7 @@ def batch_prep_uniform_without_replace(X, x_trp, verbose=False, shuffle=True,
 
 
 @background(max_prefetch=10)
-def batch_prep_fm(X, x_trp, batch_size=64,
+def batch_prep_fm(X, x_trp, batch_size=64, oversampling=20,
                   verbose=False, negative=True, shuffle=True):
     """"""
     M = X.shape[0]
@@ -127,31 +127,34 @@ def batch_prep_fm(X, x_trp, batch_size=64,
             i = np.random.choice(i)  # positive samples
 
             if negative:
-                trp.extend([(2 * k, u, 1), (2 * k, i + M, 1)])
+                trp.extend([(k, u, 1), (k, i + M, 1)])
                 y.append(1)
                 c.append(X[u, i])
+                k+=1
 
-                # sample negative sample
-                j = np.random.choice(X.shape[1])
-                while j in pos_i:
+                for _ in xrange(oversampling):
+                    # sample negative sample
                     j = np.random.choice(X.shape[1])
+                    while j in pos_i:
+                        j = np.random.choice(X.shape[1])
 
-                trp.extend([(2 * k + 1, u, 1), (2 * k + 1, j + M, 1)])
-                y.append(0)
-                c.append(X[u, j])
+                    trp.extend([(k, u, 1), (k, j + M, 1)])
+                    y.append(0)
+                    c.append(X[u, j])
+                    k+=1
             else:
                 trp.extend([(k, u, 1), (k, i + M, 1)])
                 y.append(1)
                 c.append(X[u, i])
-            k += 1
+                k += 1
 
         # make batch with sparse matrix
         x = sp.coo_matrix(
             (map(lambda r: r[2], trp),
              (map(lambda r: r[0], trp),
               map(lambda r: r[1], trp))),
-             shape=(len(y), sum(X.shape))
-        )
+             shape=(k, sum(X.shape))
+        ).toarray()
         yield x, y, c
 
 
@@ -708,23 +711,38 @@ class WRMF:
         r = self.U[u].dot(self.V.T)
         return np.argsort(r)[::-1][:k]
 
-    def fit(self, X, val=None):
-        """"""
+    def fit(self, X, A=None, val=None):
+        """
+        X = interaction matrix
+        A = attribute matrix for item (optional)
+        """
         X = X.tocsr()
         S = self.confidence_fn(X)
-        UV = factorize(S, self.n_components_, lambda_reg=self.beta,
-                       num_iterations=self.n_epoch, init_std=self.init_factor,
-                       verbose=self.verbose, dtype=self.dtype)
-        self.U_, self.V_ = UV
-        self.U = self.U_
-        self.V = self.V_
+
+        if A is None:
+            UV = factorize(S, self.n_components_, lambda_reg=self.beta,
+                           num_iterations=self.n_epoch, init_std=self.init_factor,
+                           verbose=self.verbose, dtype=self.dtype)
+            self.U_, self.V_ = UV
+            self.U = self.U_
+            self.V = self.V_
+        else:
+            UVW = cofactorize(
+                S, A, self.n_components_, lambda_reg=self.beta,
+                num_iterations=self.n_epoch, init_std=self.init_factor,
+                verbose=self.verbose, dtype=self.dtype)
+            self.U_, self.V_, self.W_ = UVW
+            self.U = self.U_
+            self.V = self.V_
+            self.W = self.W_
+
         self.b_u = None
         self.b_i = None
 
 
 class FactorizationMachine:
     """"""
-    def __init__(self, n_components, alpha=1e-3, beta=1e-1, batch_size=64,
+    def __init__(self, n_components, alpha=1e-1, beta=0, batch_size=16,
                  n_epoch=2, init_factor=1e-1, optimizer=torch.optim.Adam,
                  dtype=floatX, verbose=True):
         """"""
@@ -743,47 +761,38 @@ class FactorizationMachine:
     def predict(self, x):
         """"""
         b = self.w0
-        wx = x.mm(self.w)
-        vvxx = (
-            torch.sum(self.v.unsqueeze(0) * x.unsqueeze(-1), dim=1)**2 -
-            torch.sum(self.v.unsqueeze(0)**2 * x.unsqueeze(-1)**2, dim=1)
-        ).sum(dim=-1) * .5
-        return b + wx + vvxx
-
-    def predict_ui(self, u, i):
-        """"""
-        m = self.n_users
-
-        b = self.w0
-        wx = self.w[u] + self.w[i+m]
-        vvxx = (
-            (self.v[u] + self.v[i+m])**2 -
-            (self.v[u]**2 + self.v[i+m]**2)
-        ).sum(dim=-1) * .5
+        wx = x.matmul(self.w)
+        vvxx = (x.matmul(self.v)**2 - (x**2).matmul(self.v**2)).sum(dim=-1) * .5
         return b + wx + vvxx
 
     def predict_k(self, u, k=500):
         """"""
-        # build input
-        out = np.zeros((self.n_items,))
-        for i in xrange(self.n_items):
-            out[i] = self.predict_ui(u, i)
-        # out = []
-        # m = range(self.n_items)
-        # for k in xrange(0, self.n_items, self.batch_size):
-        #     mm = m[slice(k, k + self.batch_size)]
-        #     uu = [u] * len(mm)
-        #     out.append(self.predict_ui(mm, uu))
-        # out = np.concatenate(out)
+        # for faster evaluation, pull data from gpu
+        # and do simplified prediction
+        if self.dtype == torch.cuda.FloatTensor:
+            b = self.w0.data.cpu().numpy()
+            w = self.w.data.cpu().numpy().ravel()
+            v = self.v.data.cpu().numpy()
+        else:
+            b = self.w0.data.numpy()
+            w = self.w.data.numpy().ravel()
+            v = self.v.data.numpy()
+        wx = w[u] + w[self.n_users:]
+        vvxx = v[u][None].dot(v[self.n_users:].T) * .5
+        out = b + wx + vvxx
         return np.argsort(out.ravel())[::-1][:k]
 
     def forward(self, x, y, c=None, criterion='ce'):
         """"""
         y_ = self.predict(x)
+        s = 1. / (1. + torch.exp(-y_))
         if criterion == 'mse':
-            L = (y - y_)**2
+            L = (y - s)**2
+            # L = (y - y_)**2
         elif criterion == 'ce':
-            L = torch.log(1. + torch.exp(-y * y_))
+            # L = torch.log(1. + torch.exp(-y * y_))
+            L = -(y * torch.log(s) + (1 - y) * torch.log(1 - s))
+            # L = -((1. - y) * y_ - torch.log(1. + torch.exp(-y_)))
 
         # apply surplus confidence function
         # (assuming they were already processed)
@@ -791,13 +800,13 @@ class FactorizationMachine:
             L *= c
 
         # reduce the loss over the samples in the batch
-        L = L.sum()
+        L = L.mean()
 
         # adding regularization terms
-        L +=self.beta * (
-            ((self.w0**2).sum()) +
-            ((self.w**2).sum()) +
-            ((self.v**2).sum())
+        L = L + self.beta * (
+            ((self.w0**2).mean()) +
+            ((self.w**2).mean()) +
+            ((self.v**2).mean())
         )
         return L
 
@@ -819,13 +828,12 @@ class FactorizationMachine:
 
         # init parameters
         self.w0 = Variable(
-            torch.zeros((1,)).type(self.dtype) * self.init_factor,
+            torch.zeros((1,)).type(self.dtype),
             requires_grad=True
         )
         self.w = Variable(
-            torch.randn(
-                (self.n_users + self.n_items, 1)
-            ).type(self.dtype) * self.init_factor,
+            torch.zeros(
+                (self.n_users + self.n_items, 1)).type(self.dtype),
             requires_grad=True
         )
         self.v = Variable(
@@ -851,16 +859,42 @@ class FactorizationMachine:
             for n in N:
                 for x, y, c in batch_prep_fm(X, Y, batch_size=self.batch_size,
                                              verbose=self.verbose):
+                    # # SGD
+                    # for xx, yy, cc in zip(x, y, c):
+                    #     # cast to pytorch variable 
+                    #     xx = Variable(torch.FloatTensor(xx).type(self.dtype))
+                    #     yy = Variable(torch.FloatTensor([yy]).type(self.dtype))
 
-                    # cast to pytorch variable 
-                    x = Variable(torch.FloatTensor(x.toarray()).type(self.dtype))
+                    #     # flush grad
+                    #     opt.zero_grad()
+
+                    #     # forward pass
+                    #     # l = self.forward(xx, yy, c=1.+10.*cc)
+                    #     l = self.forward(xx, yy)
+
+                    #     # backward pass
+                    #     l.backward()
+
+                    #     # update
+                    #     opt.step()
+
+                    # Mini-batch SGD
+                    # cast to pytorch variable
+                    x = Variable(torch.FloatTensor(x).type(self.dtype))
                     y = Variable(torch.FloatTensor(y).type(self.dtype))
 
                     # flush grad
                     opt.zero_grad()
 
-                    # forward pass
+                    # forward
                     l = self.forward(x, y)
+
+                    # backward
+                    l.backward()
+
+                    # update
+                    opt.step()
+
                     if self.dtype == torch.cuda.FloatTensor:
                         l_ = l.cpu().data.numpy()
                     else:
@@ -868,12 +902,6 @@ class FactorizationMachine:
 
                     # save loss curve
                     self.loss_curve.append(l_)
-
-                    # backward pass
-                    l.backward()
-
-                    # update
-                    opt.step()
 
                     if self.verbose:
                         N.set_description(
@@ -883,7 +911,7 @@ class FactorizationMachine:
             print('[Warning] User stopped the training!')
 
 
-def main(data_fn):
+def main(data_fn, attr_fn=None):
     """"""
     from util import read_data
     import matplotlib
@@ -904,14 +932,21 @@ def main(data_fn):
     dt = sp.coo_matrix((v[rnd_idx_val], (i[rnd_idx_val], j[rnd_idx_val])),
                        shape=d.shape).tocsr()
 
+    if attr_fn is not None:
+        a = read_data(attr_fn)
+
     print('Fit model!')
     # fit
     # model = BPRMF(10, alpha=0.003, beta=0.001, verbose=True)
-    # model = WRMF(10, beta=1e-1, verbose=True)
-    # model = BPRMFcpu(10, alpha=0.004, beta=10, n_epoch=2, verbose=True)
+    model = WRMF(20, beta=1e-1, n_epoch=10, verbose=True)
+    # model = BPRMFcpu(10, alpha=1e-1, beta=1, n_epoch=2, verbose=True)
     # model = LambdaBPRMF(10, alpha=0.005, beta=5, n_epoch=2, verbose=True)
-    model = FactorizationMachine(10, alpha=1e-2, beta=1, verbose=True)
-    model.fit(d, dt)
+    # model = FactorizationMachine(10, alpha=1e-2, beta=0.5, batch_size=8, verbose=True)
+
+    if attr_fn is not None:
+        model.fit(d, a, dt)
+    else:
+        model.fit(d, dt)
 
     print('Evaluate!')
     # predict
@@ -954,7 +989,7 @@ def main(data_fn):
         fig.savefig('./data/ndcg.png')
 
 
-def test_fastfm(data_fn):
+def test_libfm(data_fn):
     """"""
     from util import read_data
     import matplotlib
@@ -977,25 +1012,30 @@ def test_fastfm(data_fn):
 
     # make fm dataset (X: csc_matrix / y: mat (n_compares, 2))
     # (including negative sampling)
+    print('Preparing Training Dataset')
     n_users = max(i) + 1
     n_items = max(j) + 1
     trp_trn = []
-    Y = []
+    R = []
     k = 0
     for u in xrange(n_users):
         pos_i = set(sp.find(d[u])[1])
         if len(pos_i) == 0:
             continue
-        for _ in xrange(20):
-            i_ = np.random.choice(list(pos_i))
+        for i_ in pos_i:
+            trp_trn.extend([(k, u, 1), (k, i_ + n_users, 1)])
+            # R.append(d[u, i_])
+            R.append(1)
+            k += 1
+
             # sample negative sample
             for _ in xrange(20):  # oversampling
                 j_ = np.random.choice(d.shape[1])
                 while j_ in pos_i:
                     j_ = np.random.choice(d.shape[1])
-                trp_trn.extend([(2 * k, u, 1), (2 * k, i_ + n_users, 1)])
-                trp_trn.extend([(2 * k + 1, u, 1), (2 * k + 1, j_ + n_users, 1)])
-                Y.append([2 * k, 2 * k + 1])
+                trp_trn.extend([(k, u, 1), (k, j_ + n_users, 1)])
+                # R.append(d[u, j_])
+                R.append(0)
                 k += 1
 
     # wrap it into sparse matrix
@@ -1003,35 +1043,41 @@ def test_fastfm(data_fn):
         (map(lambda x: x[2], trp_trn),
          (map(lambda x: x[0], trp_trn),
           map(lambda x: x[1], trp_trn))),
-        shape=(k * 2, n_users + n_items)
+        shape=(k, n_users + n_items)
     ).tocsc()
-    Y = np.array(Y).astype('float')
+
+    # prepare test data
+    print('Preparing Testing Dataset')
+    rnd_u = np.random.choice(d.shape[0], int(d.shape[0] * 0.05), replace=False)
+    trp = []
+    yt = []
+    k = 0
+    for u in rnd_u:
+        for i in xrange(n_items):
+            trp.extend([(k, u, 1), (k, i + n_users, 1)])
+            # yt.append(d[u, i])
+            yt.append(d[u, i] > 0)
+            k += 1
+    Xt = sp.coo_matrix(
+        (map(lambda x: x[2], trp),
+         (map(lambda x: x[0], trp),
+          map(lambda x: x[1], trp))),
+        shape=(k, n_users + n_items)
+    )
 
     # instantiate models
-    from fastFM.bpr import FMRecommender
-    model = FMRecommender(rank=10, n_iter=1e+3, step_size=0.1, l2_reg_w=20, l2_reg_V=50)
-    model.fit(X, Y)
+    print('Training Model!')
+    from pywFM import FM
+    fm = FM(task='regression', num_iter=100, k2=10)
+    model = fm.run(X, R, Xt, yt)
 
     print('Evaluate!')
-    # predict
-    # for efficient, sample 5% of the user to approximate the performance
-    rnd_u = np.random.choice(d.shape[0], int(d.shape[0] * 0.05), replace=False)
     rprec = []
     ndcg = []
-    for u in tqdm(rnd_u, total=len(rnd_u), ncols=80):
-        trp_tst = []
-        for i_ in xrange(n_items):
-            trp_tst.extend(
-                [(i_, u, 1), (i_, n_users + i_, 1)])
-        xt = sp.coo_matrix(
-            (map(lambda x: x[2], trp_tst),
-             (map(lambda x: x[0], trp_tst),
-              map(lambda x: x[1], trp_tst))),
-            shape=(n_items, n_users + n_items)
-        ).tocsc()
-
+    for u, uu in zip(rnd_u, xrange(0, n_items * len(rnd_u), n_items)):
         true = sp.find(dt[u])[1]
-        pred = np.argsort(model.predict(xt))[::][:cutoff]
+        pred = np.argsort(model.predictions[slice(uu, uu + n_items)])
+        pred = pred[::-1][:cutoff]
 
         rprec.append(r_precision(true, pred))
         ndcg.append(NDCG(true, pred))
@@ -1044,4 +1090,4 @@ def test_fastfm(data_fn):
 
 if __name__ == "__main__":
     fire.Fire(main)
-    # fire.Fire(test_fastfm)
+    # fire.Fire(test_libfm)
