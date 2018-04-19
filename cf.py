@@ -726,6 +726,7 @@ class WRMF:
             self.U_, self.V_ = UV
             self.U = self.U_
             self.V = self.V_
+            self.W = None
         else:
             UVW = cofactorize(
                 S, A, self.n_components_, lambda_reg=self.beta,
@@ -782,7 +783,7 @@ class FactorizationMachine:
         out = b + wx + vvxx
         return np.argsort(out.ravel())[::-1][:k]
 
-    def forward(self, x, y, c=None, criterion='ce'):
+    def forward(self, x, y, c=None, criterion='mse'):
         """"""
         y_ = self.predict(x)
         s = 1. / (1. + torch.exp(-y_))
@@ -859,41 +860,41 @@ class FactorizationMachine:
             for n in N:
                 for x, y, c in batch_prep_fm(X, Y, batch_size=self.batch_size,
                                              verbose=self.verbose):
-                    # # SGD
-                    # for xx, yy, cc in zip(x, y, c):
-                    #     # cast to pytorch variable 
-                    #     xx = Variable(torch.FloatTensor(xx).type(self.dtype))
-                    #     yy = Variable(torch.FloatTensor([yy]).type(self.dtype))
+                    # SGD
+                    for xx, yy, cc in zip(x, y, c):
+                        # cast to pytorch variable 
+                        xx = Variable(torch.FloatTensor(xx).type(self.dtype))
+                        yy = Variable(torch.FloatTensor([yy]).type(self.dtype))
 
-                    #     # flush grad
-                    #     opt.zero_grad()
+                        # flush grad
+                        opt.zero_grad()
 
-                    #     # forward pass
-                    #     # l = self.forward(xx, yy, c=1.+10.*cc)
-                    #     l = self.forward(xx, yy)
+                        # forward pass
+                        # l = self.forward(xx, yy, c=1.+10.*cc)
+                        l = self.forward(xx, yy)
 
-                    #     # backward pass
-                    #     l.backward()
+                        # backward pass
+                        l.backward()
 
-                    #     # update
-                    #     opt.step()
+                        # update
+                        opt.step()
 
-                    # Mini-batch SGD
-                    # cast to pytorch variable
-                    x = Variable(torch.FloatTensor(x).type(self.dtype))
-                    y = Variable(torch.FloatTensor(y).type(self.dtype))
+                    # # Mini-batch SGD
+                    # # cast to pytorch variable
+                    # x = Variable(torch.FloatTensor(x).type(self.dtype))
+                    # y = Variable(torch.FloatTensor(y).type(self.dtype))
 
-                    # flush grad
-                    opt.zero_grad()
+                    # # flush grad
+                    # opt.zero_grad()
 
-                    # forward
-                    l = self.forward(x, y)
+                    # # forward
+                    # l = self.forward(x, y)
 
-                    # backward
-                    l.backward()
+                    # # backward
+                    # l.backward()
 
-                    # update
-                    opt.step()
+                    # # update
+                    # opt.step()
 
                     if self.dtype == torch.cuda.FloatTensor:
                         l_ = l.cpu().data.numpy()
@@ -941,7 +942,7 @@ def main(data_fn, attr_fn=None):
     # model = WRMF(20, beta=1e-1, n_epoch=10, verbose=True)
     # model = BPRMFcpu(10, alpha=1e-1, beta=1, n_epoch=2, verbose=True)
     # model = LambdaBPRMF(10, alpha=0.005, beta=5, n_epoch=2, verbose=True)
-    model = FactorizationMachine(10, alpha=1e-2, beta=0.5, batch_size=256, verbose=True)
+    model = FactorizationMachine(10, alpha=1e-2, beta=0.01, batch_size=4, verbose=True)
 
     if attr_fn is not None:
         model.fit(d, a, dt)
@@ -1068,7 +1069,7 @@ def test_libfm(data_fn):
     # instantiate models
     print('Training Model!')
     from pywFM import FM
-    fm = FM(task='regression', num_iter=100, k2=10)
+    fm = FM(task='regression', num_iter=100, k2=10, learning_method='als')
     model = fm.run(X, R, Xt, yt)
 
     print('Evaluate!')
@@ -1089,5 +1090,5 @@ def test_libfm(data_fn):
 
 
 if __name__ == "__main__":
-    fire.Fire(main)
-    # fire.Fire(test_libfm)
+    # fire.Fire(main)
+    fire.Fire(test_libfm)
