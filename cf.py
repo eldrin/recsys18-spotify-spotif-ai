@@ -683,13 +683,14 @@ class LambdaBPRMF:
 
 class WRMF:
     """"""
-    def __init__(self, n_components, init_factor=1e-1, beta=1e-1,
+    def __init__(self, n_components, init_factor=1e-1, beta_a=1, beta=1e-1,
                  gamma=1, epsilon=1, n_epoch=10, dtype='float32',
                  verbose=False, confidence_fn=log_surplus_confidence_matrix):
         """"""
         self.n_components_ = n_components
         self.n_epoch = n_epoch
         self.beta = beta  # regularization weight
+        self.beta_a = beta_a
         self.gamma = gamma
         self.epsilon = epsilon
         self.init_factor = init_factor  # init weight
@@ -729,9 +730,9 @@ class WRMF:
             self.W = None
         else:
             UVW = cofactorize(
-                S, A, self.n_components_, lambda_reg=self.beta,
-                num_iterations=self.n_epoch, init_std=self.init_factor,
-                verbose=self.verbose, dtype=self.dtype)
+                S, A, self.n_components_, lambda_a=self.beta_a,
+                lambda_reg=self.beta, num_iterations=self.n_epoch,
+                init_std=self.init_factor, verbose=self.verbose, dtype=self.dtype)
             self.U_, self.V_, self.W_ = UVW
             self.U = self.U_
             self.V = self.V_
@@ -939,10 +940,10 @@ def main(data_fn, attr_fn=None):
     print('Fit model!')
     # fit
     # model = BPRMF(10, alpha=0.003, beta=0.001, verbose=True)
-    # model = WRMF(20, beta=1e-1, n_epoch=10, verbose=True)
+    model = WRMF(10, beta_a=1, beta=1e-1, n_epoch=30, verbose=True)
     # model = BPRMFcpu(10, alpha=1e-1, beta=1, n_epoch=2, verbose=True)
     # model = LambdaBPRMF(10, alpha=0.005, beta=5, n_epoch=2, verbose=True)
-    model = FactorizationMachine(10, alpha=1e-2, beta=0.01, batch_size=4, verbose=True)
+    # model = FactorizationMachine(10, alpha=1e-2, beta=0.01, batch_size=4, verbose=True)
 
     if attr_fn is not None:
         model.fit(d, a, dt)
@@ -990,7 +991,7 @@ def main(data_fn, attr_fn=None):
         fig.savefig('./data/ndcg.png')
 
 
-def test_libfm(data_fn):
+def test_libfm(data_fn, attr_fn=None):
     """"""
     from util import read_data
     import matplotlib
@@ -1001,6 +1002,15 @@ def test_libfm(data_fn):
     cutoff = 500
     # d = read_data(data_fn, delimiter='\t')
     d = read_data(data_fn)
+    if attr_fn is not None:
+        a = read_data(attr_fn).tocsc()
+        A = {}
+        ind = np.array(sp.find(a)).T
+        for i in xrange(a.shape[1]):
+            A[i] = ind[ind[:, 1] == i][:, 0]
+    else:
+        a = None
+
     i, j, v = sp.find(d)
     rnd_idx = np.random.choice(len(i), len(i), replace=False)
     bound = int(len(i) * 0.7)
@@ -1016,14 +1026,18 @@ def test_libfm(data_fn):
     print('Preparing Training Dataset')
     n_users = max(i) + 1
     n_items = max(j) + 1
+    n_attrs = a.shape[0] if a is not None else None
     trp_trn = []
     R = []
     k = 0
-    for u in xrange(n_users):
+    for u in tqdm(xrange(n_users), total=n_users, ncols=80):
         pos_i = set(sp.find(d[u])[1])
         if len(pos_i) == 0:
             continue
         for i_ in pos_i:
+            if a is not None:
+                for aa_ in A[i_]:
+                    trp_trn.append((k, aa_ + n_users + n_items, 1))
             trp_trn.extend([(k, u, 1), (k, i_ + n_users, 1)])
             # R.append(d[u, i_])
             R.append(1)
@@ -1034,18 +1048,28 @@ def test_libfm(data_fn):
                 j_ = np.random.choice(d.shape[1])
                 while j_ in pos_i:
                     j_ = np.random.choice(d.shape[1])
+
+                if a is not None:
+                    for aa_ in A[j_]:
+                        trp_trn.append((k, aa_ + n_users + n_items, 1))
                 trp_trn.extend([(k, u, 1), (k, j_ + n_users, 1)])
                 # R.append(d[u, j_])
                 R.append(0)
                 k += 1
 
     # wrap it into sparse matrix
+    if a is not None:
+        shape_ = (k, n_users + n_items + n_attrs)
+    else:
+        shape_ = (k, n_users + n_items)
+
     X = sp.coo_matrix(
         (map(lambda x: x[2], trp_trn),
          (map(lambda x: x[0], trp_trn),
           map(lambda x: x[1], trp_trn))),
-        shape=(k, n_users + n_items)
+        shape=shape_
     ).tocsc()
+    print('Train data : ({:d}, {:d})'.format(*X.shape))
 
     # prepare test data
     print('Preparing Testing Dataset')
@@ -1053,23 +1077,33 @@ def test_libfm(data_fn):
     trp = []
     yt = []
     k = 0
-    for u in rnd_u:
+    for u in tqdm(rnd_u, total=len(rnd_u), ncols=80):
         for i in xrange(n_items):
+            if a is not None:
+                for aa_ in A[i_]:
+                    trp.append((k, aa_ + n_users + n_items, 1))
             trp.extend([(k, u, 1), (k, i + n_users, 1)])
             # yt.append(d[u, i])
             yt.append(d[u, i] > 0)
             k += 1
+
+    if a is not None:
+        shape_ = (k, n_users + n_items + n_attrs)
+    else:
+        shape_ = (k, n_users + n_items)
+
     Xt = sp.coo_matrix(
         (map(lambda x: x[2], trp),
          (map(lambda x: x[0], trp),
           map(lambda x: x[1], trp))),
-        shape=(k, n_users + n_items)
+        shape=shape_
     )
+    print('Test data : ({:d}, {:d})'.format(*Xt.shape))
 
     # instantiate models
     print('Training Model!')
     from pywFM import FM
-    fm = FM(task='regression', num_iter=100, k2=10, learning_method='als')
+    fm = FM(task='regression', num_iter=100, k2=10)
     model = fm.run(X, R, Xt, yt)
 
     print('Evaluate!')
@@ -1090,5 +1124,5 @@ def test_libfm(data_fn):
 
 
 if __name__ == "__main__":
-    # fire.Fire(main)
-    fire.Fire(test_libfm)
+    fire.Fire(main)
+    # fire.Fire(test_libfm)
