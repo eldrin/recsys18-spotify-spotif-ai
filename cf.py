@@ -16,7 +16,7 @@ import fire
 
 import sys
 sys.path.append(os.path.join(os.getcwd(), 'wmf'))
-from wmf import factorize, cofactorize
+from wmf import factorize, cofactorize, cofactorize2
 from wmf import log_surplus_confidence_matrix
 from wmf import linear_surplus_confidence_matrix
 from wmf import recompute_factors_bias
@@ -742,6 +742,61 @@ class WRMF:
         self.b_i = None
 
 
+class WRMF2:
+    """"""
+    def __init__(self, n_components, init_factor=1e-1, beta_a=1, beta_b=1, beta=1e-1,
+                 gamma=1, epsilon=1, n_epoch=10, dtype='float32',
+                 verbose=False, confidence_fn=log_surplus_confidence_matrix):
+        """"""
+        self.n_components_ = n_components
+        self.n_epoch = n_epoch
+        self.beta = beta  # regularization weight
+        self.beta_a = beta_a
+        self.beta_b = beta_b
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.init_factor = init_factor  # init weight
+        self.confidence_fn = confidence_fn
+        if confidence_fn == linear_surplus_confidence_matrix:
+            self.confidence_fn = partial(confidence_fn, alpha=self.gamma)
+        elif confidence_fn == log_surplus_confidence_matrix:
+            self.confidence_fn = partial(
+                confidence_fn, alpha=self.gamma, epsilon=self.epsilon)
+
+        self.dtype = dtype
+        self.U = None  # u factors (torch variable / (n_u, n_r))
+        self.V = None  # i factors (torch variable / (n_i, n_r))
+        self.loss_curve = []
+        self.verbose = verbose
+
+    def predict_k(self, u, k=500):
+        """"""
+        r = self.U[u].dot(self.V.T)
+        return np.argsort(r)[::-1][:k]
+
+    def fit(self, X, A, B, val=None):
+        """
+        X = interaction matrix
+        A = attribute matrix for item (optional)
+        """
+        X = X.tocsr()
+        S = self.confidence_fn(X)
+        B = self.confidence_fn(B)
+
+        UVW = cofactorize2(
+            S, A, B, self.n_components_, lambda_a=self.beta_a, lambda_b=self.beta_b,
+            lambda_reg=self.beta, num_iterations=self.n_epoch,
+            init_std=self.init_factor, verbose=self.verbose, dtype=self.dtype)
+        self.U_, self.V_, self.W_ = UVW
+        self.U = self.U_
+        self.V = self.V_
+        self.W = self.W_
+
+        self.b_u = None
+        self.b_i = None
+
+
+
 class FactorizationMachine:
     """"""
     def __init__(self, n_components, alpha=1e-1, beta=0, batch_size=16,
@@ -913,7 +968,7 @@ class FactorizationMachine:
             print('[Warning] User stopped the training!')
 
 
-def main(data_fn, attr_fn=None):
+def main(data_fn, attr_fn=None, attr_fn2=None):
     """"""
     from util import read_data
     import matplotlib
@@ -926,7 +981,7 @@ def main(data_fn, attr_fn=None):
     d = read_data(data_fn)
     i, j, v = sp.find(d)
     rnd_idx = np.random.choice(len(i), len(i), replace=False)
-    bound = int(len(i) * 0.7)
+    bound = int(len(i) * 0.8)
     rnd_idx_trn = rnd_idx[:bound]
     rnd_idx_val = rnd_idx[bound:]
     d = sp.coo_matrix((v[rnd_idx_trn], (i[rnd_idx_trn], j[rnd_idx_trn])),
@@ -936,17 +991,24 @@ def main(data_fn, attr_fn=None):
 
     if attr_fn is not None:
         a = read_data(attr_fn)
+        a_n = a.sum(axis=1)
+    if attr_fn2 is not None:
+        b = read_data(attr_fn2)
+
 
     print('Fit model!')
     # fit
     # model = BPRMF(10, alpha=0.003, beta=0.001, verbose=True)
-    model = WRMF(10, beta_a=1, beta=1e-1, n_epoch=30, verbose=True)
-    # model = BPRMFcpu(10, alpha=1e-1, beta=1, n_epoch=2, verbose=True)
+    # model = WRMF(128, beta_a=1e-1, beta=1, gamma=100, epsilon=1e-1, n_epoch=20, verbose=True)
+    model = WRMF2(300, beta_a=1, beta_b=1, beta=1, gamma=100, epsilon=1e-1, n_epoch=30, verbose=True)
+    # model = BPRMFcpu(40, alpha=1e-1, beta=1e-5, n_epoch=2, verbose=True)
     # model = LambdaBPRMF(10, alpha=0.005, beta=5, n_epoch=2, verbose=True)
     # model = FactorizationMachine(10, alpha=1e-2, beta=0.01, batch_size=4, verbose=True)
 
-    if attr_fn is not None:
+    if attr_fn is not None and attr_fn2 is None:
         model.fit(d, a, dt)
+    elif attr_fn is not None and attr_fn2 is not None:
+        model.fit(d, a, b, dt)
     else:
         model.fit(d, dt)
 
@@ -968,14 +1030,17 @@ def main(data_fn, attr_fn=None):
     print('R Precision: {:.4f}'.format(np.mean(rprec)))
     print('NDCG: {:.4f}'.format(np.mean(ndcg)))
 
-    # print('Save models!')
-    # np.save('./data/bpr_U.npy', model.U)
-    # np.save('./data/bpr_V.npy', model.V)
+    print('Save models!')
+    np.save('./data/bpr_U.npy', model.U)
+    np.save('./data/bpr_V.npy', model.V)
+    if hasattr(model, 'W') and model.W is not None:
+        np.save('./data/bpr_W.npy', model.W)
 
-    # if model.b_i is not None:
-    #     np.save('./data/bpr_b_i.npy', model.b_i)
-    # if model.b_u is not None:
-    #     np.save('./data/bpr_b_u.npy', model.b_u)
+
+    if model.b_i is not None:
+        np.save('./data/bpr_b_i.npy', model.b_i)
+    if model.b_u is not None:
+        np.save('./data/bpr_b_u.npy', model.b_u)
 
     fig, ax = plt.subplots(1, 1)
     ax.plot(model.loss_curve, 'x')
@@ -989,6 +1054,44 @@ def main(data_fn, attr_fn=None):
         fig, ax = plt.subplots(1, 1)
         ax.plot(map(lambda x: x[1], model.acc_curve), 'x')
         fig.savefig('./data/ndcg.png')
+
+
+def test_UV(all_data_fn, test_data_fn, fn_U, fn_V):
+    """"""
+    from util import read_data
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    print('Loading data...')
+    cutoff = 500
+
+    d = read_data(all_data_fn)
+    dt = read_data(test_data_fn, delimiter='\t', shape=d.shape).tocsr()
+
+    U = np.load(fn_U)
+    V = np.load(fn_V)
+    model = WRMF(U.shape[1])
+    model.U = U
+    model.V = V
+
+    print('Evaluate!')
+    # predict
+    # for efficient, sample 5% of the user to approximate the performance
+    rnd_u = np.random.choice(d.shape[0], int(d.shape[0] * 0.05), replace=False)
+    rprec = []
+    ndcg = []
+    for u in tqdm(rnd_u, total=len(rnd_u), ncols=80):
+        true = sp.find(dt[u])[1]
+        pred = model.predict_k(u, k=cutoff)
+
+        rprec.append(r_precision(true, pred))
+        ndcg.append(NDCG(true, pred))
+    rprec = filter(lambda r: r is not None, rprec)
+    ndcg = filter(lambda r: r is not None, ndcg)
+
+    print('R Precision: {:.4f}'.format(np.mean(rprec)))
+    print('NDCG: {:.4f}'.format(np.mean(ndcg)))
 
 
 def test_libfm(data_fn, attr_fn=None):
@@ -1073,7 +1176,7 @@ def test_libfm(data_fn, attr_fn=None):
 
     # prepare test data
     print('Preparing Testing Dataset')
-    rnd_u = np.random.choice(d.shape[0], int(d.shape[0] * 0.05), replace=False)
+    rnd_u = np.random.choice(d.shape[0], int(d.shape[0] * 0.01), replace=False)
     trp = []
     yt = []
     k = 0
@@ -1103,7 +1206,7 @@ def test_libfm(data_fn, attr_fn=None):
     # instantiate models
     print('Training Model!')
     from pywFM import FM
-    fm = FM(task='regression', num_iter=100, k2=10)
+    fm = FM(task='regression', num_iter=100, k2=20, verbose=True)
     model = fm.run(X, R, Xt, yt)
 
     print('Evaluate!')
@@ -1126,3 +1229,4 @@ def test_libfm(data_fn, attr_fn=None):
 if __name__ == "__main__":
     fire.Fire(main)
     # fire.Fire(test_libfm)
+    # fire.Fire(test_UV)
