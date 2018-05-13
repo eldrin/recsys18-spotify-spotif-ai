@@ -415,7 +415,7 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
 def get_ngram(word, n=3):
     """"""
     w = '#' + str(word) + '#'
-    return [(w)[i:i+n] for i in range(len(w)-n+1)]
+    return [w[i:i+n] for i in range(len(w)-n+1)]
 
 
 def get_unique_ngrams(words, n=3, stopper='#'):

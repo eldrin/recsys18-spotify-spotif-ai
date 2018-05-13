@@ -13,7 +13,7 @@ from tqdm import tqdm, trange
 
 # from evaluation import r_precision, NDCG
 import sys
-sys.path.append('/home/ubuntu/workbench/RecsysChallengeTools/')
+sys.path.append('../RecsysChallengeTools/')
 from metrics import ndcg, r_precision, playlist_extender_clicks
 NDCG = partial(ndcg, k=500)
 
@@ -33,9 +33,9 @@ CONFIG = {
             'X': './data/spotify_feature_popularity_scaled_ss2.npy'
         },
         'data':{
-            'train': '/mnt/bulk/recsys18/playlist_track_ss_train.csv',
-            'test': '/mnt/bulk/recsys18/playlist_track_ss_test.csv',
-            'artist2track': '/mnt/bulk/recsys18/artist_track_ss.csv',
+            'train': './data/playlist_track_ss_train.csv',
+            'test': './data/playlist_track_ss_test.csv',
+            'artist2track': './data/artist_track_ss.csv',
         },
         'model_out': './models/',
         'log_out': './logs/'
@@ -45,7 +45,7 @@ CONFIG = {
         'num_epochs': 50,
         'neg_sample': 5,
         'learn_rate': 0.01,
-        'batch_size': 1024,
+        'batch_size': 512,
         'mlp_arch': [64, 64, 32],
         'learn_metric': True,
         'non_lin': nn.ReLU,
@@ -107,9 +107,10 @@ class MPDSampler:
         self.batch_size = config['hyper_parameters']['batch_size']
 
         # prepare positive sample pools
-        self.pos_tracks = {}
-        for u in trange(self.n_playlists, ncols=80):
-            self.pos_tracks[u] = set(self.triplet[self.triplet['playlist'] == u]['track'])
+        self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(list))
+        # self.pos_tracks = {}
+        # for u in trange(self.n_playlists, ncols=80):
+        #     self.pos_tracks[u] = set(self.triplet[self.triplet['playlist'] == u]['track'])
 
         self.neg = config['hyper_parameters']['neg_sample']
         self.verbose = verbose

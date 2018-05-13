@@ -16,7 +16,7 @@ from tqdm import tqdm, trange
 
 # from evaluation import r_precision, NDCG
 import sys
-sys.path.append('/home/ubuntu/workbench/RecsysChallengeTools/')
+sys.path.append('../RecsysChallengeTools/')
 from metrics import ndcg, r_precision, playlist_extender_clicks
 NDCG = partial(ndcg, k=500)
 
@@ -39,11 +39,11 @@ CONFIG = {
             'X': './data/spotify_feature_popularity_scaled_ss2.npy'
         },
         'data':{
-            'playlists': '/mnt/bulk/recsys18/playlist_hash_ss.csv',
-            'tracks': '/mnt/bulk/recsys18/track_hash_ss.csv',
-            'train': '/mnt/bulk/recsys18/playlist_track_ss_train.csv',
-            'test': '/mnt/bulk/recsys18/playlist_track_ss_test.csv',
-            'artist2track': '/mnt/bulk/recsys18/artist_track_ss.csv',
+            'playlists': './data/playlist_hash_ss.csv',
+            'tracks': './data/track_hash_ss.csv',
+            'train': './data/playlist_track_ss_train.csv',
+            'test': './data/playlist_track_ss_test.csv',
+            'artist2track': './data/artist_track_ss.csv',
         },
         'model_out': './models/',
         'log_out': './logs/'
@@ -52,8 +52,8 @@ CONFIG = {
     'hyper_parameters':{
         'num_epochs': 50,
         'neg_sample': 5,
-        'learn_rate': 0.01,
-        'batch_size': 512,
+        'learn_rate': 0.001,
+        'batch_size': 500,
         'learn_metric': True,
         'non_lin': nn.ReLU,
         'dropout': False,
@@ -86,8 +86,9 @@ class SeqTensor:
         """"""
         # process seq
         seq_ngram = transform_id2ngram_id(seq, title_dict, ngram_dict)
-        lengths = torch.cuda.LongTensor(map(len, seq_ngram))
-        max_len = lengths.max()
+        lengths = map(len, seq_ngram)
+        max_len = max(lengths)
+        lengths = torch.cuda.LongTensor(lengths)
         X_pl = torch.cuda.LongTensor(
             [a + [0] * (max_len - len(a)) for a in seq_ngram])
         length_sorted, ind = lengths.sort(descending=True)
@@ -143,13 +144,13 @@ class CFRNN(nn.Module):
         self.item_rnn = nn.GRU(n_components, n_hid, n_layers, batch_first=True)
 
         if learn_metric:
-            # self.metric = nn.Sequential(
-            #     nn.Linear(n_hid * 2, n_hid),
-            #     self.non_lin(),
-            #     nn.Linear(n_hid, 1)
-            # )
-            # self.add_module('metric', self.metric)
-            self.metric = nn.Linear(n_hid * 2, 1)
+            self.metric = nn.Sequential(
+                nn.Linear(n_hid * 2, n_hid),
+                self.non_lin(),
+                nn.Linear(n_hid, 1)
+            )
+            self.add_module('metric', self.metric)
+            # self.metric = nn.Linear(n_hid * 2, 1)
 
     def forward(self, pid, tid):
         """
@@ -162,7 +163,7 @@ class CFRNN(nn.Module):
 
         # pack
         emb_pl = pack_padded_sequence(emb_pl, pid.lengths.tolist(), batch_first=True)
-        emb_tl = pack_padded_sequence(emb_tr, tid.lengths.tolist(), batch_first=True)
+        emb_tr = pack_padded_sequence(emb_tr, tid.lengths.tolist(), batch_first=True)
 
         # rnn
         out_u, hid_u = self.user_rnn(emb_pl)
@@ -187,14 +188,14 @@ class CFRNN(nn.Module):
         emb_pl = self.embs['user'](Variable(pid.seq))
         emb_pl = pack_padded_sequence(emb_pl, pid.lengths.tolist(), batch_first=True)
         out_u, hid_u = self.user_rnn(emb_pl)
-        return hid_u[0]
+        return pid.unsort(hid_u[-1])
 
     def item_factor(self, tid):
         """"""
         emb_tr = self.embs['item'](Variable(tid.seq))
         emb_tr = pack_padded_sequence(emb_tr, tid.lengths.tolist(), batch_first=True)
         out_i, hid_i = self.item_rnn(emb_tr)
-        return hid_i[0]
+        return tid.unsort(hid_i[-1])
 
 
 if __name__ == "__main__":
@@ -225,18 +226,18 @@ if __name__ == "__main__":
     model = CFRNN(
         n_components=128, n_users=len(uniq_ngrams_pl),
         n_items=len(uniq_ngrams_tr),user_emb=None, item_emb=None,
-        n_hid=64, user_train=True, item_train=True, n_layers=1,
+        n_hid=128, user_train=True, item_train=True, n_layers=1,
         non_lin=nn.ReLU, layer_norm=False
     ).cuda()
 
     # set loss / optimizer
     f_loss = nn.BCEWithLogitsLoss().cuda()
-    # opt = torch.optim.Adam(
-    #     filter(lambda p: p.requires_grad, model.parameters()),
-    #     weight_decay=HP['l2'], lr=HP['learn_rate'])
-    opt = torch.optim.Adagrad(
+    opt = torch.optim.Adam(
         filter(lambda p: p.requires_grad, model.parameters()),
         weight_decay=HP['l2'], lr=HP['learn_rate'])
+    # opt = torch.optim.Adagrad(
+    #     filter(lambda p: p.requires_grad, model.parameters()),
+    #     weight_decay=HP['l2'], lr=HP['learn_rate'])
 
     # main training loop
     model.train()
@@ -270,7 +271,7 @@ if __name__ == "__main__":
                 # clip gradients
                 grad_norm = nn.utils.clip_grad_norm(
                     filter(lambda p: p.requires_grad, model.parameters()),
-                    max_norm=10
+                    max_norm=100
                 )
 
                 # update
