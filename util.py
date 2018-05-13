@@ -5,12 +5,14 @@ import numpy as np
 
 def read_data(fn, delimiter=',', f_cast=int, shape=None):
     """"""
-    ll = pd.read_csv(fn, sep=delimiter, header=None)
-    offset_i = ll[0].min()
-    offset_j = ll[1].min()
+    ll = pd.read_csv(fn, sep=delimiter, header=None, index_col=None)
+    # offset_i = ll[0].min()
+    # offset_j = ll[1].min()
+    # i = ll[0] - offset_i
+    # j = ll[1] - offset_j
+    i = ll[0]
+    j = ll[1]
 
-    i = ll[0] - offset_i
-    j = ll[1] - offset_j
     if len(ll.columns) > 2:
         v = ll[2]
     else:

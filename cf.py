@@ -2,6 +2,7 @@ import os
 from functools import partial
 from scipy import sparse as sp
 import numpy as np
+import pandas as pd
 import copy
 
 import torch
@@ -9,7 +10,9 @@ from torch.autograd import Variable
 
 from prefetch_generator import background
 from util import sparse2triplet
-from evaluation import r_precision, NDCG
+# from evaluation import r_precision, NDCG
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.neighbors import NearestNeighbors
 
 from tqdm import trange, tqdm
 import fire
@@ -20,6 +23,11 @@ from wmf import factorize, cofactorize, cofactorize2
 from wmf import log_surplus_confidence_matrix
 from wmf import linear_surplus_confidence_matrix
 from wmf import recompute_factors_bias
+from wmf import iter_rows
+
+sys.path.append('/home/ubuntu/workbench/RecsysChallengeTools/')
+from metrics import ndcg, r_precision, playlist_extender_clicks
+NDCG = partial(ndcg, k=500)
 
 try:
     print(torch.cuda.current_device())
@@ -158,6 +166,40 @@ def batch_prep_fm(X, x_trp, batch_size=64, oversampling=20,
         yield x, y, c
 
 
+def sparse_cosine_similarities(s_mat, axis=0):
+    """"""
+    if axis == 0:
+        mat = s_mat.tocsc()
+    elif axis == 1:
+        mat = s_mat.tocsr()
+
+    normed_mat = pp.normalize(mat, axis=axis)
+    return normed_mat.T * normed_mat
+
+
+class KNN:
+    """"""
+    def __init__(self, sim_fn=cosine_similarity, item_sim=True):
+        """"""
+        self.item_sim = item_sim
+        self.sim_fn = sim_fn
+
+    def fit(self, X, val=None):
+        """"""
+        if not self.item_sim:
+            X = X.T
+
+        X = X.tocsr()
+        self.X = X
+        self.nn = NearestNeighbors(metric="cosine")
+        self.nn.fit(X)
+
+    def predict_k(self, u, k=500):
+        """"""
+        dist, indx = self.nn.kneighbors(self.X[u], n_neighbors=k)
+        return indx.ravel()
+
+
 class BPRMF:
     """
     MF based on BPR loss.
@@ -225,7 +267,7 @@ class BPRMF:
         self.V[i].data.sub_(lr * (a * U + lda * (I**2).sum()).data)
         self.V[j].data.sub_(lr * (a * (-U) + lda * (J**2).sum()).data)
 
-    def fit(self, X):
+    def fit(self, X, val=None):
         """"""
         # quick convert
         X = X.tocsr()
@@ -268,7 +310,8 @@ class BPRMF:
                     l = self.forward(u, i, j)
 
                     # save loss curve
-                    self.loss_curve.append(l.data)
+                    l_ = l.data.cpu().numpy().item()
+                    self.loss_curve.append(l_)
 
                     # # backward pass
                     # l.backward()
@@ -279,7 +322,7 @@ class BPRMF:
 
                     if self.verbose:
                         N.set_description(
-                            '[loss : {:.4f}]'.format(l.data.numpy().item())
+                            '[loss : {:.4f}]'.format(l_)
                         )
         except KeyboardInterrupt:
             print('[Warning] User stopped the training!')
@@ -968,7 +1011,42 @@ class FactorizationMachine:
             print('[Warning] User stopped the training!')
 
 
-def main(data_fn, attr_fn=None, attr_fn2=None):
+def naive_boosting_Uc(S, A, Uc, U, V, W, lambda_reg, dtype='float32'):
+    """"""
+    S, A = S.tocsr(), A.tocsr()
+
+    m = S.shape[0]
+    f = U.shape[1]
+
+    Vw = A.T.dot(W)
+    VTVw = np.dot(V.T, Vw)
+
+    VwTVw = np.dot(Vw.T, Vw)
+    VwTVwpI = VwTVw + lambda_reg * np.eye(f)
+
+    Uc_new = np.zeros((m, f))
+
+    for k, s_u, i_u in iter_rows(S):
+        U_u = U[k]
+        V_u = V[i_u]
+        Vw_u = Vw[i_u]
+        VTSVw = np.dot(V_u.T, (Vw_u * s_u.reshape(-1, 1)))
+        A = np.dot(s_u + 1, Vw_u) - np.dot(U_u, VTVw + VTSVw)
+        VwTSVw = np.dot(Vw_u.T, (Vw_u * s_u.reshape(-1, 1)))
+        B = VwTVw + VwTVwpI
+
+        Uc_new[k] = np.linalg.solve(B.T, A.T).T
+
+    return Uc_new
+
+
+def boosted_pred_k(u, model, Uc, Vw, k=500):
+    """"""
+    r = model.U[u].dot(model.V.T) + Uc[u].dot(Vw.T)
+    return np.argsort(r)[::-1][:k]
+
+
+def main(train_data_fn, test_data_fn, r=2, attr_fn=None, attr_fn2=None):
     """"""
     from util import read_data
     import matplotlib
@@ -978,57 +1056,99 @@ def main(data_fn, attr_fn=None, attr_fn2=None):
     print('Loading data...')
     cutoff = 500
     # d = read_data(data_fn, delimiter='\t')
-    d = read_data(data_fn)
-    i, j, v = sp.find(d)
-    rnd_idx = np.random.choice(len(i), len(i), replace=False)
-    bound = int(len(i) * 0.8)
-    rnd_idx_trn = rnd_idx[:bound]
-    rnd_idx_val = rnd_idx[bound:]
-    d = sp.coo_matrix((v[rnd_idx_trn], (i[rnd_idx_trn], j[rnd_idx_trn])),
-                      shape=d.shape)
-    dt = sp.coo_matrix((v[rnd_idx_val], (i[rnd_idx_val], j[rnd_idx_val])),
-                       shape=d.shape).tocsr()
+    d = read_data(train_data_fn).tocsr()
+    dt = read_data(test_data_fn, shape=d.shape).tocsr()
 
     if attr_fn is not None:
         a = read_data(attr_fn)
         a_n = a.sum(axis=1)
     if attr_fn2 is not None:
-        b = read_data(attr_fn2)
+        b = read_data(attr_fn2, shape=(a.shape[0], a.shape[0]))
 
 
-    print('Fit model!')
+    print('Fit model (r={:d})!'.format(r))
     # fit
-    # model = BPRMF(10, alpha=0.003, beta=0.001, verbose=True)
-    # model = WRMF(128, beta_a=1e-1, beta=1, gamma=100, epsilon=1e-1, n_epoch=20, verbose=True)
-    model = WRMF2(300, beta_a=1, beta_b=1, beta=1, gamma=100, epsilon=1e-1, n_epoch=30, verbose=True)
-    # model = BPRMFcpu(40, alpha=1e-1, beta=1e-5, n_epoch=2, verbose=True)
+    # model = KNN()
+    # model = BPRMF(r, verbose=True)
+    # model = WRMF(r, beta_a=1, beta=1, gamma=100, epsilon=1e-1, n_epoch=10, verbose=True)
+    model = WRMF2(r, beta_a=1, beta_b=1, beta=1, gamma=100, epsilon=1e-1, n_epoch=20, verbose=True)
+    # model = BPRMFcpu(r, alpha=1e-1, beta=1e-5, n_epoch=2, verbose=True)
     # model = LambdaBPRMF(10, alpha=0.005, beta=5, n_epoch=2, verbose=True)
     # model = FactorizationMachine(10, alpha=1e-2, beta=0.01, batch_size=4, verbose=True)
 
+    boosted = False
     if attr_fn is not None and attr_fn2 is None:
-        model.fit(d, a, dt)
+        model.fit(d, a, val=None)
     elif attr_fn is not None and attr_fn2 is not None:
-        model.fit(d, a, b, dt)
+        model.fit(d, a, b, val=None)
+
+        print('Naive boosting...')
+        Uc = np.random.randn(*model.U.shape) * 1e-2
+        for i in range(5):
+            print('[boosting] {:d}th iter...'.format(i))
+            Uc = naive_boosting_Uc(
+                d, a, Uc, model.U, model.V, model.W, model.beta)
+        Vw = a.T.dot(model.W)
+        boosted = True
+
     else:
-        model.fit(d, dt)
+        print('No Attribute Information!')
+        model.fit(d, val=None)
 
     print('Evaluate!')
     # predict
     # for efficient, sample 5% of the user to approximate the performance
-    rnd_u = np.random.choice(d.shape[0], int(d.shape[0] * 0.05), replace=False)
+    # rnd_u = np.random.choice(d.shape[0], int(d.shape[0] * 0.05), replace=False)
+    trg_u = np.where(dt.sum(axis=1) > 0)[0]
     rprec = []
-    ndcg = []
-    for u in tqdm(rnd_u, total=len(rnd_u), ncols=80):
+    ndcg_ = []
+    clicks = []
+    for u in tqdm(trg_u, total=len(trg_u), ncols=80):
         true = sp.find(dt[u])[1]
-        pred = model.predict_k(u, k=cutoff)
+        if len(true) == 0:
+            continue
+        pred = model.predict_k(u, k=cutoff * 2)
+        # exclude training data
+        true_t = set(sp.find(d[u])[1])
+        pred = filter(lambda x: x not in true_t, pred)[:cutoff]
 
         rprec.append(r_precision(true, pred))
-        ndcg.append(NDCG(true, pred))
+        ndcg_.append(NDCG(true, pred))
+        clicks.append(playlist_extender_clicks(true, pred))
+
     rprec = filter(lambda r: r is not None, rprec)
-    ndcg = filter(lambda r: r is not None, ndcg)
+    ndcg_ = filter(lambda r: r is not None, ndcg_)
+    clicks = filter(lambda r: r is not None, clicks)
 
     print('R Precision: {:.4f}'.format(np.mean(rprec)))
-    print('NDCG: {:.4f}'.format(np.mean(ndcg)))
+    print('NDCG: {:.4f}'.format(np.mean(ndcg_)))
+    print('Playlist Extender Clicks: {:.4f}'.format(np.mean(clicks)))
+
+    if boosted:
+        print('Boosted!!')
+        rprec = []
+        ndcg_ = []
+        clicks = []
+        for u in tqdm(trg_u, total=len(trg_u), ncols=80):
+            true = sp.find(dt[u])[1]
+            if len(true) == 0:
+                continue
+            pred = boosted_pred_k(u, model, Uc, Vw, k=cutoff * 2)
+            # exclude training data
+            true_t = set(sp.find(d[u])[1])
+            pred = filter(lambda x: x not in true_t, pred)[:cutoff]
+
+            rprec.append(r_precision(true, pred))
+            ndcg_.append(NDCG(true, pred))
+            clicks.append(playlist_extender_clicks(true, pred))
+
+        rprec = filter(lambda r: r is not None, rprec)
+        ndcg_ = filter(lambda r: r is not None, ndcg_)
+        clicks = filter(lambda r: r is not None, clicks)
+
+        print('R Precision: {:.4f}'.format(np.mean(rprec)))
+        print('NDCG: {:.4f}'.format(np.mean(ndcg_)))
+        print('Playlist Extender Clicks: {:.4f}'.format(np.mean(clicks)))
 
     print('Save models!')
     np.save('./data/bpr_U.npy', model.U)
@@ -1036,6 +1156,9 @@ def main(data_fn, attr_fn=None, attr_fn2=None):
     if hasattr(model, 'W') and model.W is not None:
         np.save('./data/bpr_W.npy', model.W)
 
+    if boosted:
+        np.save('./data/bpr_Uc.npy', Uc)
+        np.save('./data/bpr_Vw.npy', Vw)
 
     if model.b_i is not None:
         np.save('./data/bpr_b_i.npy', model.b_i)
@@ -1094,7 +1217,7 @@ def test_UV(all_data_fn, test_data_fn, fn_U, fn_V):
     print('NDCG: {:.4f}'.format(np.mean(ndcg)))
 
 
-def test_libfm(data_fn, attr_fn=None):
+def test_libfm(data_fn, r=2, attr_fn=None):
     """"""
     from util import read_data
     import matplotlib
@@ -1206,7 +1329,7 @@ def test_libfm(data_fn, attr_fn=None):
     # instantiate models
     print('Training Model!')
     from pywFM import FM
-    fm = FM(task='regression', num_iter=100, k2=20, verbose=True)
+    fm = FM(task='regression', num_iter=100, k2=r, verbose=False, rlog=False)
     model = fm.run(X, R, Xt, yt)
 
     print('Evaluate!')
