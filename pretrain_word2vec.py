@@ -1,13 +1,16 @@
 import os
+import re
 import random
 from random import shuffle
 from itertools import chain
+import cPickle as pkl
 
 import pandas as pd
 import numpy as np
 from sklearn.metrics import accuracy_score
 from nltk.tokenize.nist import NISTTokenizer
 # from nltk.tokenize import sent_tokenize
+from gensim.models import Word2Vec
 
 import torch
 from torch.autograd import Variable
@@ -25,14 +28,19 @@ def load_n_process_data(fn, title_column=1, sep='\t', context_win=2):
 
     # get uniq words
     nist = NISTTokenizer()
-    context = d[1].apply(lambda a: nist.international_tokenize(a.decode('utf-8'), lowercase=True))
-    words = set(list(chain.from_iterable(context)))
+    sentences = d[1].apply(
+        lambda a: nist.international_tokenize(
+            re.sub(r'\([^)]*\)', '', a).decode('utf-8'),
+            lowercase=True
+        )
+    )
+    words = set(list(chain.from_iterable(sentences)))
     words_hash = {v: k for k, v in enumerate(words)}
 
     # make input-out pairs
     data = []
     win_sz = 2 * context_win + 1
-    for i, cont in tqdm(context.iteritems(), total=context.shape[0], ncols=80):
+    for i, cont in tqdm(sentences.iteritems(), total=sentences.shape[0], ncols=80):
         if len(cont) > 1:
             windowed = [cont[i: i + win_sz] for i in range(len(cont) - win_sz + 1)]
             for c in windowed:
@@ -41,7 +49,7 @@ def load_n_process_data(fn, title_column=1, sep='\t', context_win=2):
                     if x != c_:
                         data.append((x, c_))
 
-    return data, words_hash
+    return sentences, data, words_hash
 
 
 @background(max_prefetch=100)
@@ -80,7 +88,7 @@ class SkipGram(nn.Module):
 
 if __name__ == "__main__":
 
-    h = 100
+    h = 300
     bs = 256
     n_epoch = 100
     l2 = 1e-4
@@ -88,69 +96,87 @@ if __name__ == "__main__":
     adam_eps = 1e-5
     train_ratio = 0.9
     report_every = 200
+    use_gensim = True
 
     # preparing data
-    track_fn = '/mnt/bulk/recsys18/track_hash_ss.csv'
-    data, words_hash = load_n_process_data(track_fn)
-    # train / test split
-    shuffle(data)
-    train_bound = int(len(data) * train_ratio)
-    train_data = data[:train_bound]
-    test_data = data[train_bound:]
-    print('num of samples: {:d}'.format(len(data)))
-    print('num of uniq words: {:d}'.format(len(words_hash)))
+    track_fn = './data/track_hash_ss.csv'
+    sentences, data, words_hash = load_n_process_data(track_fn)
 
-    # building model
-    model = SkipGram(h, len(words_hash)).cuda()
+    if use_gensim:
+        model = Word2Vec(
+            sentences, size=h, window=2, min_count=1, workers=8, sg=1,
+            hs=0, negative=5, iter=30
+        )
 
-    # set loss / optimizer
-    f_loss = nn.CrossEntropyLoss().cuda()
-    opt = torch.optim.Adam(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        weight_decay=l2, lr=lr, eps=adam_eps)
+        # convert gensim model to ndarray
+        embedding_matrix = np.zeros((len(model.wv.vocab), h))
+        for i in range(len(model.wv.vocab)):
+            emb = model.wv[model.wv.index2word[i]]
+            if emb is not None:
+                embedding_matrix[i] = emb
+        # save relavant data
+        np.save('./data/w_emb_skipgram_track_ttl_gensim.npy', embedding_matrix)
+        pkl.dump(model.wv.index2word, open('./data/track_id2word.pkl', 'wb'))
+    else:
+        # train / test split
+        shuffle(data)
+        train_bound = int(len(data) * train_ratio)
+        train_data = data[:train_bound]
+        test_data = data[train_bound:]
+        print('num of samples: {:d}'.format(len(data)))
+        print('num of uniq words: {:d}'.format(len(words_hash)))
 
-    # main training loop
-    model.train()
-    try:
-        k = 0  # num of update
-        epoch = trange(n_epoch, ncols=80)
-        for n in epoch:
-            for x, y in sample_generator(train_data, words_hash, bs):
-                # flush grad
-                opt.zero_grad()
+        # building model
+        model = SkipGram(h, len(words_hash)).cuda()
 
-                # forward pass
-                y_pred = model.forward(x)
+        # set loss / optimizer
+        f_loss = nn.CrossEntropyLoss().cuda()
+        opt = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, model.parameters()),
+            weight_decay=l2, lr=lr, eps=adam_eps)
 
-                # calc loss
-                l = f_loss(y_pred, y)
+        # main training loop
+        model.train()
+        try:
+            k = 0  # num of update
+            epoch = trange(n_epoch, ncols=80)
+            for n in epoch:
+                for x, y in sample_generator(train_data, words_hash, bs):
+                    # flush grad
+                    opt.zero_grad()
 
-                # back-propagation
-                l.backward()
+                    # forward pass
+                    y_pred = model.forward(x)
 
-                # update
-                opt.step()
-                k += 1
+                    # calc loss
+                    l = f_loss(y_pred, y)
 
-                if k % report_every == 0:
-                    model.eval()  # temporarily switch off to evaluation mode
-                    # fetch some test samples
-                    test_batch = random.sample(test_data, 128)
-                    Xv = Variable(torch.cuda.LongTensor(map(lambda x: words_hash[x[0]], test_batch)))
-                    true_v = np.array(map(lambda x: words_hash[x[1]], test_batch))
-                    pred_v = np.argsort(model.forward(Xv).data.cpu().numpy(), axis=1)[:,-1]
-                    acc = accuracy_score(true_v, pred_v)
+                    # back-propagation
+                    l.backward()
 
-                    # log
-                    epoch.set_description(
-                        '[tloss: {:.3f} / vacc: {:.3f}]'.format(float(l.data), acc)
-                    )
-                    model.train()
+                    # update
+                    opt.step()
+                    k += 1
 
-    except KeyboardInterrupt:
-        print('[Warning] User stopped the training!')
-    # switch off to evaluation mode
-    model.eval()
+                    if k % report_every == 0:
+                        model.eval()  # temporarily switch off to evaluation mode
+                        # fetch some test samples
+                        test_batch = random.sample(test_data, 128)
+                        Xv = Variable(torch.cuda.LongTensor(map(lambda x: words_hash[x[0]], test_batch)))
+                        true_v = np.array(map(lambda x: words_hash[x[1]], test_batch))
+                        pred_v = np.argsort(model.forward(Xv).data.cpu().numpy(), axis=1)[:,-1]
+                        acc = accuracy_score(true_v, pred_v)
 
-    # save embedding
-    np.save('./data/w_emb_skipgram_track_ttl.npy', model.emb.weight.data.cpu().numpy())
+                        # log
+                        epoch.set_description(
+                            '[tloss: {:.3f} / vacc: {:.3f}]'.format(float(l.data), acc)
+                        )
+                        model.train()
+
+        except KeyboardInterrupt:
+            print('[Warning] User stopped the training!')
+        # switch off to evaluation mode
+        model.eval()
+
+        # save embedding
+        np.save('./data/w_emb_skipgram_track_ttl.npy', model.emb.weight.data.cpu().numpy())

@@ -14,10 +14,11 @@ tqdm = "*"
 prefetch-generator = "*"
 pandas = "*"
 fire = "*"
-# torch = "*"
+torch = "*"
 sklearn = "*"
 nltk = "*"
-"34a454a" = {file = "http://download.pytorch.org/whl/cu80/torch-0.3.0-cp27-cp27mu-linux_x86_64.whl"}
+gensim = "*"
+# "34a454a" = {file = "http://download.pytorch.org/whl/cu80/torch-0.3.0-cp27-cp27mu-linux_x86_64.whl"}
 
 [requires]
 python_version = "2.7"
