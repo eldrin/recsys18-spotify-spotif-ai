@@ -39,11 +39,11 @@ CONFIG = {
             'X': './data/spotify_feature_popularity_scaled_ss2.npy'
         },
         'data':{
-            'playlists': './data/playlist_hash_ss.csv',
-            'tracks': './data/track_hash_ss.csv',
-            'train': './data/playlist_track_ss_train.csv',
-            'test': './data/playlist_track_ss_test.csv',
-            'artist2track': './data/artist_track_ss.csv',
+            'playlists': '/mnt/bulk/recsys18/playlist_hash_ss.csv',
+            'tracks': '/mnt/bulk/recsys18/track_hash_ss.csv',
+            'train': '/mnt/bulk/recsys18/playlist_track_ss_train.csv',
+            'test': '/mnt/bulk/recsys18/playlist_track_ss_test.csv',
+            'artist2track': '/mnt/bulk/recsys18/artist_track_ss.csv',
         },
         'model_out': './models/',
         'log_out': './logs/'
@@ -226,7 +226,7 @@ if __name__ == "__main__":
     model = CFRNN(
         n_components=128, n_users=len(uniq_ngrams_pl),
         n_items=len(uniq_ngrams_tr),user_emb=None, item_emb=None,
-        n_hid=128, user_train=True, item_train=True, n_layers=1,
+        n_hid=128, user_train=True, item_train=True, n_layers=3,
         non_lin=nn.ReLU, layer_norm=False
     ).cuda()
 

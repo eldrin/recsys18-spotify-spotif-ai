@@ -1,29 +1,23 @@
 [[source]]
-
 url = "https://pypi.python.org/simple"
 verify_ssl = true
 name = "pypi"
 
-
 [dev-packages]
 
-
-
 [packages]
-
 torchvision = "*"
-ipython = "*"
+ipython = "==5.7.0"
 scipy = "*"
 matplotlib = "*"
 tqdm = "*"
 prefetch-generator = "*"
 pandas = "*"
 fire = "*"
-torch = "*"
+# torch = "*"
 sklearn = "*"
-# "34a454a" = {file = "http://download.pytorch.org/whl/cu80/torch-0.3.0-cp27-cp27mu-linux_x86_64.whl"}
-
+nltk = "*"
+"34a454a" = {file = "http://download.pytorch.org/whl/cu80/torch-0.3.0-cp27-cp27mu-linux_x86_64.whl"}
 
 [requires]
-
 python_version = "2.7"
