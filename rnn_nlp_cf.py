@@ -235,9 +235,6 @@ if __name__ == "__main__":
     opt = torch.optim.Adam(
         filter(lambda p: p.requires_grad, model.parameters()),
         weight_decay=HP['l2'], lr=HP['learn_rate'])
-    # opt = torch.optim.Adagrad(
-    #     filter(lambda p: p.requires_grad, model.parameters()),
-    #     weight_decay=HP['l2'], lr=HP['learn_rate'])
 
     # main training loop
     model.train()

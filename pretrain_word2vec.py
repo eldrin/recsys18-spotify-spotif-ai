@@ -117,6 +117,7 @@ if __name__ == "__main__":
         # save relavant data
         np.save('./data/w_emb_skipgram_track_ttl_gensim.npy', embedding_matrix)
         pkl.dump(model.wv.index2word, open('./data/track_id2word.pkl', 'wb'))
+
     else:
         # train / test split
         shuffle(data)

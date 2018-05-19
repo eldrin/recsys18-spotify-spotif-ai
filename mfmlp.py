@@ -1,8 +1,15 @@
 import os
+import random
 from functools import partial
+from itertools import chain
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 from sklearn.utils import shuffle
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -42,12 +49,16 @@ CONFIG = {
     },
 
     'hyper_parameters':{
-        'num_epochs': 50,
-        'neg_sample': 5,
-        'learn_rate': 0.01,
-        'batch_size': 512,
-        'mlp_arch': [64, 64, 32],
-        'learn_metric': True,
+        'eval_while_fit': True,
+        'sample_weight': False,
+        'sample_weight_power': 3./4,
+        'sample_threshold': 1e-6,
+        'num_epochs': 100,
+        'neg_sample': 10,
+        'learn_rate': 0.001,
+        'batch_size': 10000,
+        'mlp_arch': [],
+        'learn_metric': False,
         'non_lin': nn.ReLU,
         'dropout': False,
         'l2': 1e-8,
@@ -85,7 +96,7 @@ def _load_data(config):
     # )
     return (
         None, dat['train'], dat['test'],
-        dict(dat['artist2track'][[1, 0]].as_matrix())
+        dict(dat['artist2track'][[1, 0]].values)
     )
 
 
@@ -105,12 +116,36 @@ class MPDSampler:
         self.n_tracks = self.train['track'].nunique()
         self.num_interactions = self.train.shape[0]
         self.batch_size = config['hyper_parameters']['batch_size']
+        self.is_weight = config['hyper_parameters']['sample_weight']
+        self.weight_pow = config['hyper_parameters']['sample_weight_power']
+        self.threshold = config['hyper_parameters']['sample_threshold']
 
         # prepare positive sample pools
-        self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(list))
-        # self.pos_tracks = {}
-        # for u in trange(self.n_playlists, ncols=80):
-        #     self.pos_tracks[u] = set(self.triplet[self.triplet['playlist'] == u]['track'])
+        self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(set))
+        self.pos_tracks_t = dict(self.test.groupby('playlist')['track'].apply(set))
+        if self.is_weight:
+            # check word (track) frequency
+            track_count = self.triplet.groupby('track').count()['playlist']
+            f_w = np.array(map(
+                lambda x: x[1],
+                sorted(track_count.to_dict().items(), key=lambda x: x[0])
+            ))
+
+            # Sub-sampling
+            p_drop = dict(zip(range(len(f_w)), 1. - np.sqrt(self.threshold / f_w)))
+            train_words = filter(lambda r: np.random.random() < (1 - r[1]), p_drop.items())
+            train_words = map(lambda r: r[0], train_words)
+
+            # preprocess weighted sampling pool
+            f_w_pow = np.round(np.power(f_w, self.weight_pow))[train_words]
+            self.items = list(
+                chain.from_iterable([[k] * int(v) for k, v in zip(train_words, f_w_pow)])
+            )
+            self.items = dict(enumerate(self.items))
+
+        else:
+            self.items = range(self.n_tracks)
+            self.items = dict(enumerate(self.items))
 
         self.neg = config['hyper_parameters']['neg_sample']
         self.verbose = verbose
@@ -118,37 +153,44 @@ class MPDSampler:
     @background(max_prefetch=10000)
     def generator(self):
         """"""
-        dat = self.triplet.values
-
         if self.verbose:
-            M = tqdm(shuffle(dat), ncols=80)
+            M = tqdm(self.triplet.sample(frac=1).values, ncols=80)
         else:
-            M = shuffle(dat)
+            M = self.triplet.sample(frac=1).values
 
         batch = []
-        for u, i, v in M:  # draw playlist and track (positive)
+        for u, i, v in M:
+
             # positive sample / yield
             pos_i = self.pos_tracks[u]
             if v == 0:
                 continue
+
             # s = 240.7895  # log_surplus(1)
-            s = self.neg
+            s = 1
             batch.append((u, i, self.track2artist[i], 1, s))
-            if len(batch) >= self.batch_size:
+
+            # sample negative sample
+            s = 1.
+
+            negs = set()
+            for k in xrange(self.neg):
+                # j_ = np.random.choice(self.n_tracks)
+                j_ = self.items[np.random.choice(len(self.items))]
+                # while (j_ in pos_i) or (j_ in negs):
+                while j_ in pos_i:
+                    # j_ = np.random.choice(self.n_tracks)
+                    j_ = self.items[np.random.choice(len(self.items))]
+                negs.update((j_,))
+
+                # negtive sample has 0 interaction (conf==1)
+                batch.append((u, j_, self.track2artist[j_], -1, s))
+
+            # batch.append(batch_)
+            if len(batch) >= self.batch_size * (1. + self.neg):
                 yield batch
                 batch = []
 
-            # sample negative sample / yield
-            for _ in xrange(self.neg):
-                j_ = np.random.choice(self.n_tracks)
-                while j_ in pos_i:
-                    j_ = np.random.choice(self.n_tracks)
-
-                # negtive sample has 0 interaction (conf==1)
-                batch.append((u, j_, self.track2artist[j_], 0, 1))
-                if len(batch) >= self.batch_size:
-                    yield batch
-                    batch = []
 
 class CFMLP(nn.Module):
     """
@@ -161,7 +203,8 @@ class CFMLP(nn.Module):
     """
     def __init__(self, n_components, n_users, n_items, architecture=[50, 50, 50],
                  user_train=True, item_train=True, user_emb=None, item_emb=None,
-                 non_lin=nn.ReLU, batch_norm=True, drop_out=0, learn_metric=True):
+                 non_lin=nn.ReLU, batch_norm=True, drop_out=0, learn_metric=True,
+                 init=0.01):
         """"""
         super(CFMLP, self).__init__()
         self.n_components = n_components
@@ -183,13 +226,15 @@ class CFMLP(nn.Module):
                 self.embs[k].weight.data.copy_(torch.FloatTensor(emb))
             else:
                 r = architecture[0]
+                u = np.random.randn(n, r) * init
                 self.embs[k] = nn.Embedding(n, r)
+                self.embs[k].weight.data.copy_(torch.FloatTensor(u))
             self.embs[k].weight.requires_grad = train
 
             # get non-linear embedding
             n_in = r
             layers = [self.embs[k]]
-            for l, n_h in enumerate(self.arch):
+            for l, n_h in enumerate(self.arch[1:]):
                 layers.append(nn.Linear(n_in, n_h))
                 if batch_norm:
                     layers.append(nn.BatchNorm1d(n_h))
@@ -204,11 +249,18 @@ class CFMLP(nn.Module):
 
     def forward(self, u, i):
         """"""
-        elem_sum = self.mlps['user'](u) * self.mlps['item'](i)
+        p = self.mlps['user'](u)
+        q = self.mlps['item'](i)
+
         if self.learn_metric:
+            elem_sum = p * q
             return self.metric(elem_sum)[:, 0]
         else:
-            return torch.sum(elem_sum, dim=1)
+            y = torch.bmm(
+                p.view(p.shape[0], 1, p.shape[1]),
+                q.view(q.shape[0], q.shape[1], 1)
+            ).squeeze(1).squeeze(1)
+            return y
 
 
 class GMFMLP(nn.Module):
@@ -217,7 +269,7 @@ class GMFMLP(nn.Module):
                  architecture=[50, 50, 50],
                  user_train=True, item_train=True, attr_train=False,
                  user_emb=None, item_emb=None, attr_emb=None,
-                 non_lin=nn.ReLU, batch_norm=True, drop_out=0):
+                 non_lin=nn.ReLU, batch_norm=True, drop_out=True):
         """"""
         super(GMFMLP, self).__init__()
         self.n_components = n_components
@@ -225,6 +277,7 @@ class GMFMLP(nn.Module):
         self.n_items = n_items
         self.arch = architecture
         self.arch.append(self.n_components)
+        self.drop_out = drop_out
         self.alpha = alpha
         self.non_lin = non_lin
         self.embs = {}
@@ -263,6 +316,8 @@ class GMFMLP(nn.Module):
         self.mlp = nn.Sequential(*layers)
         self.add_module('mlp', self.mlp)
 
+        self.dropout = nn.Dropout()  # only for emb?
+
         self.metric_mlp = nn.Linear(n_components, 1)
         self.metric_mf = nn.Linear(n_components, 1)
 
@@ -271,6 +326,9 @@ class GMFMLP(nn.Module):
         # input
         emb_pl, emb_tr = self.emb_u(pid), self.emb_i(tid)
         emb = torch.cat([self.embs['user'](pid), self.embs['item'](tid)], dim=-1)
+
+        # if self.drop_out:
+        #     emb = self.dropout(emb)
 
         # pass to MLP
         h_mlp = self.mlp(emb)
@@ -286,6 +344,22 @@ class GMFMLP(nn.Module):
 
         return y_pred[:, 0]
 
+
+class NEGCrossEntropyLoss(nn.Module):
+    """"""
+    def __init__(self):
+        """"""
+        super(NEGCrossEntropyLoss, self).__init__()
+
+    def forward(self, hv, targ, weight=None):
+        """"""
+        # targ[targ==0] = -1
+        if weight is not None:
+            return -(F.logsigmoid(hv * targ) * weight).mean()
+        else:
+            return -F.logsigmoid(hv * targ).mean()
+
+
 class RecNet:
     """"""
     def __init__(self, config, verbose=False):
@@ -297,47 +371,55 @@ class RecNet:
         self.non_lin = config['hyper_parameters']['non_lin']
         self.l2 = config['hyper_parameters']['l2']
         self.alpha = config['hyper_parameters']['alpha']
+        self.eval_while_fit = config['hyper_parameters']['eval_while_fit']
         self.verbose = verbose
         self.embs = _load_embeddings(config)
+        self.loss_curve = []
+        self.acc_curve = {'ndcg':[], 'rprec':[]}
 
         # build mlp
         # load embedding and put them in Embedding layer
-        P, V, W, X = [
-            torch.Tensor(self.embs[a]) for a in ['U', 'V', 'W', 'X']]
+        P, V, W = [
+            torch.Tensor(self.embs[a]) for a in ['U', 'V', 'W']]
 
-        # make concatenated item factor
-        W = W[[self.track2artist[t] for t in xrange(V.shape[0])]]
-        Q = np.concatenate([W, X], axis=-1)
+        # # make concatenated item factor
+        # W = W[[self.track2artist[t] for t in xrange(V.shape[0])]]
+        # Q = np.concatenate([W, X], axis=-1)
 
-        # # initiate model
-        # self.core_model = CFMLP(
-        #     n_components=self.arch[-1],
-        #     n_users=P.shape[0], n_items=V.shape[0],
-        #     architecture=self.arch[:-1],
-        #     user_train=True, item_train=True,
-        #     user_emb=None, item_emb=None,
-        #     non_lin=self.non_lin, batch_norm=False,
-        #     learn_metric=True
-        # ).cuda()
-
-        self.core_model = GMFMLP(
-            n_components=P.shape[-1],
+        # initiate model
+        self.core_model = CFMLP(
+            # n_components=P.shape[-1],
+            n_components=10,
             n_users=P.shape[0], n_items=V.shape[0],
-            architecture=self.arch, alpha=self.alpha,
+            architecture=self.arch,
             user_train=True, item_train=True,
             user_emb=None, item_emb=None,
             non_lin=self.non_lin, batch_norm=False,
+            learn_metric=False
         ).cuda()
 
+        # self.core_model = GMFMLP(
+        #     n_components=P.shape[-1],
+        #     n_users=P.shape[0], n_items=V.shape[0],
+        #     architecture=self.arch, alpha=self.alpha,
+        #     user_train=True, item_train=True,
+        #     user_emb=None, item_emb=None,
+        #     non_lin=self.non_lin, batch_norm=True,
+        #     drop_out=False
+        # ).cuda()
 
         # setup loss function
         # self.loss_fn = nn.MSELoss(reduce=False).cuda()
-        self.loss_fn = nn.BCEWithLogitsLoss().cuda()
+        # self.loss_fn = nn.BCEWithLogitsLoss().cuda()
+        self.loss_fn = NEGCrossEntropyLoss().cuda()
 
         self.optim = torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.core_model.parameters()),
-            weight_decay=self.l2, lr=self.lr
+            weight_decay=self.l2, lr=self.lr, eps=1e-8
         )
+        # self.optim = torch.optim.SGD(
+        #     filter(lambda p: p.requires_grad, self.core_model.parameters()),
+        #     weight_decay=self.l2, lr=self.lr)
 
     def predict(self, pid, tid):
         """"""
@@ -366,15 +448,13 @@ class RecNet:
         self.optim.zero_grad()  # flush last grad
 
         # forward pass
-        y_pred = self.predict(pid, tid)
+        y_pred = self.predict(Variable(pid), Variable(tid))
 
         # calculate loss
-        # # get loss (weighted MSE)
+        # # get loss (weighted)
         # l = torch.sum(
         #     self.loss_fn(y_pred, Variable(preference)) * Variable(confidence)
         # )
-
-        # get loss (MSE) or (BCE)
         l = self.loss_fn(y_pred, Variable(preference))
 
         l.backward()  # back-propagation
@@ -394,22 +474,43 @@ class RecNet:
         try:
             for n in epoch:
                 for batch in sampler.generator():
-                    batch_t = np.array(batch).T
-
-                    pid, tid = [
-                        torch.cuda.LongTensor(a) for a in batch_t[:2]]
-                    pref, conf = [
-                        torch.cuda.FloatTensor(a) for a in batch_t[-2:]]
+                    pid = torch.cuda.LongTensor(map(lambda x: x[0], batch))
+                    tid = torch.cuda.LongTensor(map(lambda x: x[1], batch))
+                    pref = torch.cuda.FloatTensor(map(lambda x: x[3], batch))
+                    conf = torch.cuda.FloatTensor(map(lambda x: x[4], batch))
 
                     loss = self.partial_fit(pid, tid, pref, conf)
 
                     if self.verbose:
+                        self.loss_curve.append(float(loss))
                         epoch.set_description(
                             '[loss : {:.4f}]'.format(float(loss))
                         )
+
+                if self.eval_while_fit:
+                    trg_u = sampler.test['playlist'].unique()
+                    rprec = []
+                    ndcg = []
+                    for u in trg_u:
+                        true = sampler.pos_tracks_t[u]
+                        true_t = sampler.pos_tracks[u]
+                        pred = model.predict_k(u, k=500 * 2)
+                        pred = filter(lambda x: x not in true_t, pred)[:500]
+                        rprec.append(r_precision(list(true), pred))
+                        ndcg.append(NDCG(list(true), pred))
+                    rprec = filter(lambda r: r is not None, rprec)
+                    ndcg = filter(lambda r: r is not None, ndcg)
+                    self.acc_curve['rprec'].append(np.mean(rprec))
+                    self.acc_curve['ndcg'].append(np.mean(ndcg))
+
         except KeyboardInterrupt:
             print('[Warning] User stopped the training!')
         self.core_model.eval()
+        fig, axs = plt.subplots(2, 1)
+        axs[0].plot(self.loss_curve)
+        axs[1].plot(self.acc_curve['rprec'])
+        axs[1].plot(self.acc_curve['ndcg'])
+        fig.savefig('./data/loss.png')
 
 
 if __name__ == "__main__":
@@ -425,15 +526,15 @@ if __name__ == "__main__":
     rprec = []
     ndcg = []
     for u in tqdm(trg_u, total=len(trg_u), ncols=80):
-        true = sampler.test[sampler.test['playlist'] == u]['track']
-        true_t = set(sampler.train[sampler.train['playlist'] == u]['track'])
+        true = sampler.pos_tracks_t[u]
+        true_t = sampler.pos_tracks[u]
         pred = model.predict_k(u, k=K * 2)
 
         # exclude training data
         pred = filter(lambda x: x not in true_t, pred)[:K]
 
-        rprec.append(r_precision(true, pred))
-        ndcg.append(NDCG(true, pred))
+        rprec.append(r_precision(list(true), pred))
+        ndcg.append(NDCG(list(true), pred))
     rprec = filter(lambda r: r is not None, rprec)
     ndcg = filter(lambda r: r is not None, ndcg)
 
