@@ -187,10 +187,10 @@ if __name__ == "__main__":
     # prepare model instances
     sampler = MPDSampler(CONFIG, verbose=True)
     model = CFRNN(
-        n_components=hyper_parameters['n_embedding'],
-        n_hid=hyper_parameters['n_hid'],
-        n_layers=hyper_parameters['n_layers'],
-        non_lin=hyper_parameters['non_lin'],
+        n_components=HP['n_embedding'],
+        n_hid=HP['n_hid'],
+        n_layers=HP['n_layers'],
+        non_lin=HP['non_lin'],
         n_users=len(uniq_ngrams_pl), n_items=len(uniq_ngrams_tr),
         user_emb=None, item_emb=None, user_train=True, item_train=True,
     ).cuda()
