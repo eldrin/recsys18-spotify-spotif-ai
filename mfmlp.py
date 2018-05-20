@@ -53,6 +53,8 @@ def _load_data(config):
     # dat['main'].columns = ['playlist', 'track']
     dat['train'].columns = ['playlist', 'track', 'value']  # set columns name
     dat['test'].columns = ['playlist', 'track', 'value']
+
+    dat['train'] = dat['train'][dat['train']['value'] == 1]
     # return (
     #     dat['main'], dat['train'], dat['test'],
     #     dict(dat['artist2track'][[1, 0]].as_matrix())

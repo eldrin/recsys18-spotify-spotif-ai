@@ -20,52 +20,15 @@ sys.path.append('../RecsysChallengeTools/')
 from metrics import ndcg, r_precision, playlist_extender_clicks
 NDCG = partial(ndcg, k=500)
 
-from mfmlp import MPDSampler
+from mfmlp import MPDSampler, NEGCrossEntropyLoss
 from data import get_ngram, get_unique_ngrams
+from cfrnn_conf import CONFIG
 
 try:
     print(torch.cuda.current_device())
     floatX = torch.cuda.FloatTensor
 except:
     floatX = torch.FloatTensor
-
-
-CONFIG = {
-    'path':{
-        'embeddings':{
-            'U': './data/bpr_U.npy',
-            'V': './data/bpr_V.npy',
-            'W': './data/bpr_W.npy',
-            'X': './data/spotify_feature_popularity_scaled_ss2.npy'
-        },
-        'data':{
-            'playlists': '/mnt/bulk/recsys18/playlist_hash_ss.csv',
-            'tracks': '/mnt/bulk/recsys18/track_hash_ss.csv',
-            'train': '/mnt/bulk/recsys18/playlist_track_ss_train.csv',
-            'test': '/mnt/bulk/recsys18/playlist_track_ss_test.csv',
-            'artist2track': '/mnt/bulk/recsys18/artist_track_ss.csv',
-        },
-        'model_out': './models/',
-        'log_out': './logs/'
-    },
-
-    'hyper_parameters':{
-        'num_epochs': 50,
-        'neg_sample': 5,
-        'learn_rate': 0.001,
-        'batch_size': 500,
-        'learn_metric': True,
-        'non_lin': nn.ReLU,
-        'dropout': False,
-        'l2': 1e-8,
-        'alpha': 0,
-        'ngram_n': 3
-    },
-
-    'evaluation':{
-        'cutoff':500
-    }
-}
 
 
 def transform_id2ngram_id(ids, title_dict, ngram_dict, n=3):
@@ -224,15 +187,17 @@ if __name__ == "__main__":
     # prepare model instances
     sampler = MPDSampler(CONFIG, verbose=True)
     model = CFRNN(
-        n_components=128, n_users=len(uniq_ngrams_pl),
-        n_items=len(uniq_ngrams_tr),user_emb=None, item_emb=None,
-        n_hid=128, user_train=True, item_train=True, n_layers=3,
-        non_lin=nn.ReLU, layer_norm=False
+        n_components=hyper_parameters['n_embedding'],
+        n_hid=hyper_parameters['n_hid'],
+        n_layers=hyper_parameters['n_layers'],
+        non_lin=hyper_parameters['non_lin'],
+        n_users=len(uniq_ngrams_pl), n_items=len(uniq_ngrams_tr),
+        user_emb=None, item_emb=None, user_train=True, item_train=True,
     ).cuda()
 
     # set loss / optimizer
-    f_loss = nn.BCEWithLogitsLoss().cuda()
-    opt = torch.optim.Adam(
+    f_loss = NEGCrossEntropyLoss().cuda()
+    opt = torch.optim.Adagrad(
         filter(lambda p: p.requires_grad, model.parameters()),
         weight_decay=HP['l2'], lr=HP['learn_rate'])
 

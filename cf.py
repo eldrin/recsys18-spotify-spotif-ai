@@ -25,7 +25,7 @@ from wmf import linear_surplus_confidence_matrix
 from wmf import recompute_factors_bias
 from wmf import iter_rows
 
-sys.path.append('/home/ubuntu/workbench/RecsysChallengeTools/')
+sys.path.append('../RecsysChallengeTools/')
 from metrics import ndcg, r_precision, playlist_extender_clicks
 NDCG = partial(ndcg, k=500)
 
@@ -1070,8 +1070,8 @@ def main(train_data_fn, test_data_fn, r=2, attr_fn=None, attr_fn2=None):
     # fit
     # model = KNN()
     # model = BPRMF(r, verbose=True)
-    # model = WRMF(r, beta_a=1, beta=1, gamma=100, epsilon=1e-1, n_epoch=10, verbose=True)
-    model = WRMF2(r, beta_a=1, beta_b=1, beta=1, gamma=100, epsilon=1e-1, n_epoch=20, verbose=True)
+    model = WRMF(r, beta_a=1, beta=1, gamma=100, epsilon=1e-1, n_epoch=30, verbose=True)
+    # model = WRMF2(r, beta_a=1, beta_b=1, beta=1, gamma=100, epsilon=1e-1, n_epoch=20, verbose=True)
     # model = BPRMFcpu(r, alpha=1e-1, beta=1e-5, n_epoch=2, verbose=True)
     # model = LambdaBPRMF(10, alpha=0.005, beta=5, n_epoch=2, verbose=True)
     # model = FactorizationMachine(10, alpha=1e-2, beta=0.01, batch_size=4, verbose=True)
