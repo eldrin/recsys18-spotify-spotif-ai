@@ -56,7 +56,7 @@ CONFIG = {
         'num_epochs': 100,
         'neg_sample': 10,
         'learn_rate': 0.001,
-        'batch_size': 10000,
+        'batch_size': 128,
         'mlp_arch': [],
         'learn_metric': False,
         'non_lin': nn.ReLU,
@@ -159,21 +159,18 @@ class MPDSampler:
             M = self.triplet.sample(frac=1).values
 
         batch = []
+        # s_pos = 240.7895  # log_surplus(1)
+        s_pos = 1
+        s_neg = 1
+        # negs = set()
         for u, i, v in M:
-
             # positive sample / yield
             pos_i = self.pos_tracks[u]
             if v == 0:
                 continue
+            batch.append((u, i, self.track2artist[i], 1, s_pos))
 
-            # s = 240.7895  # log_surplus(1)
-            s = 1
-            batch.append((u, i, self.track2artist[i], 1, s))
-
-            # sample negative sample
-            s = 1.
-
-            negs = set()
+            # draw negative samples (for-loop)
             for k in xrange(self.neg):
                 # j_ = np.random.choice(self.n_tracks)
                 j_ = self.items[np.random.choice(len(self.items))]
@@ -181,10 +178,10 @@ class MPDSampler:
                 while j_ in pos_i:
                     # j_ = np.random.choice(self.n_tracks)
                     j_ = self.items[np.random.choice(len(self.items))]
-                negs.update((j_,))
+                # negs.update((j_,))
 
                 # negtive sample has 0 interaction (conf==1)
-                batch.append((u, j_, self.track2artist[j_], -1, s))
+                batch.append((u, j_, self.track2artist[j_], -1, s_neg))
 
             # batch.append(batch_)
             if len(batch) >= self.batch_size * (1. + self.neg):
@@ -474,10 +471,15 @@ class RecNet:
         try:
             for n in epoch:
                 for batch in sampler.generator():
-                    pid = torch.cuda.LongTensor(map(lambda x: x[0], batch))
-                    tid = torch.cuda.LongTensor(map(lambda x: x[1], batch))
-                    pref = torch.cuda.FloatTensor(map(lambda x: x[3], batch))
-                    conf = torch.cuda.FloatTensor(map(lambda x: x[4], batch))
+                    batch_t = np.array(batch).T
+                    pid = torch.cuda.LongTensor(batch_t[0])
+                    tid = torch.cuda.LongTensor(batch_t[1])
+                    pref = torch.cuda.FloatTensor(batch_t[3])
+                    conf = torch.cuda.FloatTensor(batch_t[4])
+                    # pid = torch.cuda.LongTensor(map(lambda x: x[0], batch))
+                    # tid = torch.cuda.LongTensor(map(lambda x: x[1], batch))
+                    # pref = torch.cuda.FloatTensor(map(lambda x: x[3], batch))
+                    # conf = torch.cuda.FloatTensor(map(lambda x: x[4], batch))
 
                     loss = self.partial_fit(pid, tid, pref, conf)
 
