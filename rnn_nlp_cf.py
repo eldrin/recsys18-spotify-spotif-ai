@@ -1,9 +1,13 @@
 import os
+import re
 from functools import partial
 from collections import namedtuple
+import cPickle as pkl
 import pandas as pd
 import numpy as np
 from sklearn.utils import shuffle
+
+from nltk.tokenize.nist import NISTTokenizer
 
 import torch
 from torch import nn
@@ -22,6 +26,7 @@ NDCG = partial(ndcg, k=500)
 
 from mfmlp import MPDSampler, NEGCrossEntropyLoss
 from data import get_ngram, get_unique_ngrams
+from pretrain_word2vec import load_n_process_data
 from cfrnn_conf import CONFIG
 
 try:
@@ -45,10 +50,13 @@ def transform_id2ngram_id(ids, title_dict, ngram_dict, n=3):
 
 
 class SeqTensor:
-    def __init__(self, seq, title_dict, ngram_dict):
+    def __init__(self, seq, title_dict=None, ngram_dict=None):
         """"""
         # process seq
-        seq_ngram = transform_id2ngram_id(seq, title_dict, ngram_dict)
+        if title_dict is None and ngram_dict is None:
+            seq_ngram = seq
+        else:  # process on-the-go
+            seq_ngram = transform_id2ngram_id(seq, title_dict, ngram_dict)
         lengths = map(len, seq_ngram)
         max_len = max(lengths)
         lengths = torch.cuda.LongTensor(lengths)
@@ -78,7 +86,7 @@ class SeqTensor:
 class CFRNN(nn.Module):
     """"""
     def __init__(self, n_components, n_users, n_items,user_emb, item_emb,
-                 n_hid=100, user_train=True, item_train=True, n_layers=1,
+                 n_hid=100, n_out=16, user_train=True, item_train=True, n_layers=1,
                  non_lin=nn.ReLU, layer_norm=False, drop_out=0, learn_metric=True):
         """"""
         super(CFRNN, self).__init__()
@@ -87,6 +95,7 @@ class CFRNN(nn.Module):
         self.n_items = n_items
         self.n_layers = n_layers
         self.non_lin = non_lin
+        self.n_out = n_out
         self.learn_metric = learn_metric
         self.embs = {}
 
@@ -95,25 +104,32 @@ class CFRNN(nn.Module):
                                  ('item', item_emb, n_items, item_train)]:
             if emb is not None:
                 r = emb.shape[-1]
-                self.embs[k] = nn.Embedding(n, r)
-                self.embs[k].weight.data.copy_(torch.FloatTensor(emb))
+                emb_lyr = nn.Embedding(n, r)
+                emb_lyr.weight.data.copy_(torch.FloatTensor(emb))
             else:
                 r = n_components
-                self.embs[k] = nn.Embedding(n, r)
-            self.embs[k].weight.requires_grad = train
+                emb_lyr = nn.Embedding(n, r)
+            emb_lyr.weight.requires_grad = train
+            self.embs[k] = nn.Sequential(
+                emb_lyr,
+                nn.Linear(r, n_hid), self.non_lin()
+            )
             self.add_module(k, self.embs[k])
 
-        self.user_rnn = nn.GRU(n_components, n_hid, n_layers, batch_first=True)
-        self.item_rnn = nn.GRU(n_components, n_hid, n_layers, batch_first=True)
+        self.user_rnn = nn.GRU(n_hid, n_hid, n_layers, batch_first=True)
+        self.item_rnn = nn.GRU(n_hid, n_hid, n_layers, batch_first=True)
 
         if learn_metric:
             self.metric = nn.Sequential(
-                nn.Linear(n_hid * 2, n_hid),
+                nn.Linear(n_hid * 2, n_out),
                 self.non_lin(),
                 nn.Linear(n_hid, 1)
             )
             self.add_module('metric', self.metric)
             # self.metric = nn.Linear(n_hid * 2, 1)
+        else:
+            self.user_out = nn.Linear(n_hid, n_out)
+            self.item_out = nn.Linear(n_hid, n_out)
 
     def forward(self, pid, tid):
         """
@@ -142,7 +158,11 @@ class CFRNN(nn.Module):
             h = torch.cat([hid_u, hid_i], dim=-1)  # (batch, n_hid * 2)
             y_pred = self.metric(h)[:, 0]
         else:
-            y_pred = torch.sum(hid_u * hid_i, dim=-1)
+            y_pred = torch.bmm(
+                self.user_out(hid_u).view(hid_u.shape[0], 1, self.n_out),
+                self.item_out(hid_i).view(hid_i.shape[0], self.n_out, 1)
+            ).squeeze()
+            # y_pred = torch.sum(hid_u * hid_i, dim=-1)
 
         return y_pred
 
@@ -151,14 +171,14 @@ class CFRNN(nn.Module):
         emb_pl = self.embs['user'](Variable(pid.seq))
         emb_pl = pack_padded_sequence(emb_pl, pid.lengths.tolist(), batch_first=True)
         out_u, hid_u = self.user_rnn(emb_pl)
-        return pid.unsort(hid_u[-1])
+        return self.user_out(pid.unsort(hid_u[-1]))
 
     def item_factor(self, tid):
         """"""
         emb_tr = self.embs['item'](Variable(tid.seq))
         emb_tr = pack_padded_sequence(emb_tr, tid.lengths.tolist(), batch_first=True)
         out_i, hid_i = self.item_rnn(emb_tr)
-        return tid.unsort(hid_i[-1])
+        return self.item_out(tid.unsort(hid_i[-1]))
 
 
 if __name__ == "__main__":
@@ -171,33 +191,78 @@ if __name__ == "__main__":
     uniq_playlists = pd.read_csv(CONFIG['path']['data']['playlists'], sep='\t',
                                  index_col=None, header=None)
     uniq_ngrams_pl = get_unique_ngrams(uniq_playlists[1].values, n=HP['ngram_n'])
-    playlist_dict = dict(uniq_playlists[[3, 1]].as_matrix())
+    playlist_dict_ = dict(uniq_playlists[[3, 1]].values)
     pl_ngram_dict = {v:k for k, v in enumerate(uniq_ngrams_pl)}
+
+    playlist_dict = dict(zip(
+        playlist_dict_.keys(),
+        transform_id2ngram_id(
+            playlist_dict_.keys(), playlist_dict_, pl_ngram_dict)
+    ))
+
     print('Uniq {:d}-Gram for playlists: {:d}'
           .format(HP['ngram_n'], len(uniq_ngrams_pl)))
 
+    # for track, we will use word2vec pretrained embedding
     uniq_tracks = pd.read_csv(CONFIG['path']['data']['tracks'], sep='\t',
                               index_col=None, header=None)
-    uniq_ngrams_tr = get_unique_ngrams(uniq_tracks[1].values, n=HP['ngram_n'])
-    track_dict = dict(uniq_tracks[[3, 1]].as_matrix())
-    tr_ngram_dict = {v:k for k, v in enumerate(uniq_ngrams_tr)}
-    print('Uniq {:d}-Gram for tracks: {:d}'
-          .format(HP['ngram_n'], len(uniq_ngrams_tr)))
+    if HP['track_emb'] == 'word2vec':
+        nist = NISTTokenizer()
+        titles = uniq_tracks[1].apply(
+            lambda a: nist.international_tokenize(
+                re.sub(r'\([^)]*\)', '', a).decode('utf-8'),
+                lowercase=True
+            )
+        )
+        # simple remedy
+        missing = titles.apply(len) == 0
+        titles[missing] = uniq_tracks[missing][1].apply(lambda x: x.lower().split())
+        id2word = pkl.load(open(CONFIG['path']['embeddings']['track_id2word']))
+        word2id = {v: k for k, v in enumerate(id2word)}
+        track_dict = {
+            k: [word2id[vv] for vv in v] for k, v in titles.items()}
+
+        track_emb = np.load(CONFIG['path']['embeddings']['track_word'])
+        n_words = len(id2word)
+        train_emb = False
+        print('Uniq Token for tracks: {:d}'.format(len(id2word)))
+        print('# of 0 length seq: {:d}'.format(
+            len(filter(lambda r: r == 0, map(len, track_dict.values())))
+        ))
+
+    elif HP['track_emb'] == 'ngram':
+        uniq_ngrams_tr = get_unique_ngrams(uniq_tracks[1].values, n=HP['ngram_n'])
+        track_dict_ = dict(uniq_tracks[[3, 1]].values)
+        tr_ngram_dict = {v:k for k, v in enumerate(uniq_ngrams_tr)}
+
+        track_dict = dict(zip(
+            track_dict_.keys(),
+            transform_id2ngram_id(
+                track_dict_.keys(), track_dict_, tr_ngram_dict)
+        ))
+
+        track_emb = None
+        n_words = len(uniq_ngrams_tr)
+        train_emb = True
+        print('Uniq {:d}-Gram for tracks: {:d}'
+              .format(HP['ngram_n'], len(uniq_ngrams_tr)))
 
     # prepare model instances
     sampler = MPDSampler(CONFIG, verbose=True)
     model = CFRNN(
         n_components=HP['n_embedding'],
         n_hid=HP['n_hid'],
+        n_out=HP['n_out_embedding'],
         n_layers=HP['n_layers'],
         non_lin=HP['non_lin'],
-        n_users=len(uniq_ngrams_pl), n_items=len(uniq_ngrams_tr),
-        user_emb=None, item_emb=None, user_train=True, item_train=True,
+        n_users=len(uniq_ngrams_pl), n_items=n_words,
+        user_emb=None, item_emb=track_emb, user_train=True, item_train=train_emb,
+        learn_metric=HP['learn_metric']
     ).cuda()
 
     # set loss / optimizer
     f_loss = NEGCrossEntropyLoss().cuda()
-    opt = torch.optim.Adagrad(
+    opt = HP['optimizer'](
         filter(lambda p: p.requires_grad, model.parameters()),
         weight_decay=HP['l2'], lr=HP['learn_rate'])
 
@@ -215,8 +280,10 @@ if __name__ == "__main__":
                     torch.cuda.FloatTensor(a) for a in batch_t[-2:]]
 
                 # process seqs
-                pid = SeqTensor(pid, playlist_dict, pl_ngram_dict)
-                tid = SeqTensor(tid, track_dict, tr_ngram_dict)
+                # pid = SeqTensor(pid, playlist_dict, pl_ngram_dict)
+                # tid = SeqTensor(tid, track_dict, tr_ngram_dict)
+                pid = SeqTensor([playlist_dict[i] for i in pid], None, None)
+                tid = SeqTensor([track_dict[i] for i in tid], None, None)
 
                 # flush grad
                 opt.zero_grad()
@@ -230,18 +297,21 @@ if __name__ == "__main__":
                 # back-propagation
                 l.backward()
 
-                # clip gradients
-                grad_norm = nn.utils.clip_grad_norm(
-                    filter(lambda p: p.requires_grad, model.parameters()),
-                    max_norm=100
-                )
+                # # clip gradients
+                # grad_norm = nn.utils.clip_grad_norm(
+                #     filter(lambda p: p.requires_grad, model.parameters()),
+                #     max_norm=100
+                # )
 
                 # update
                 opt.step()
 
                 # log
+                # epoch.set_description(
+                #     '[loss : {:.3f} / |grad|: {:.2f}]'.format(float(l.data), grad_norm)
+                # )
                 epoch.set_description(
-                    '[loss : {:.3f} / |grad|: {:.2f}]'.format(float(l.data), grad_norm)
+                    '[loss : {:.3f}]'.format(float(l.data))
                 )
 
     except KeyboardInterrupt:
@@ -255,21 +325,29 @@ if __name__ == "__main__":
 
     # 1) extract playlist / track factors first from embedding-rnn blocks
     b = 500
-    m = model.n_items
+    m = uniq_tracks.shape[0]
     tid = range(m)
     #   1.1) ext item factors first
     Q = []
-    for j in trange(0, m, b, ncols=80):
-        tid_ = SeqTensor(tid[j:j+b], track_dict, tr_ngram_dict)
+    for j in trange(0, m+(m%b), b, ncols=80):
+        if j > m:
+            continue
+        tid_ = SeqTensor([track_dict[jj] for jj in tid[j:j+b]], None, None)
         Q.append(model.item_factor(tid_).data.cpu().numpy())
     Q = np.concatenate(Q, axis=0)
+    np.save('./data/title_rnn_V.npy', Q)
 
     #   1.2) ext playlist factors
+    n = uniq_playlists.shape[0]
+    pid = range(n)
     P = []
-    for j in trange(0, len(trg_u), b, ncols=80):
-        pid_ = SeqTensor(trg_u[j:j+b], playlist_dict, pl_ngram_dict)
+    for j in trange(0, n+(n%b), b, ncols=80):
+        if j > n:
+            continue
+        pid_ = SeqTensor([playlist_dict[jj] for jj in pid[j:j+b]], None, None)
         P.append(model.user_factor(pid_).data.cpu().numpy())
     P = np.concatenate(P, axis=0)
+    np.save('./data/title_rnn_U.npy', P)
 
     #   2) calculate scores using the same way of MLP case
     rprec = []
@@ -279,10 +357,14 @@ if __name__ == "__main__":
         true_t = set(sampler.train[sampler.train['playlist'] == u]['track'])
 
         # predict k
-        cat = np.concatenate([np.tile(P[j], (Q.shape[0], 1)), Q], axis=-1)
+        if model.learn_metric:
+            cat = np.concatenate([np.tile(P[u], (Q.shape[0], 1)), Q], axis=-1)
         pred = []
         for k in trange(0, m, b, ncols=80):
-            pred.append(model.metric(Variable(torch.cuda.FloatTensor(cat[k:k+b])))[:, 0].data)
+            if model.learn_metric:
+                pred.append(model.metric(Variable(torch.cuda.FloatTensor(cat[k:k+b])))[:, 0].data)
+            else:
+                pred.append(P[u].dot(Q[k:k+b].T))
         pred = np.concatenate(pred, axis=0)
         ind = np.argsort(pred)[::-1][:1000]
 

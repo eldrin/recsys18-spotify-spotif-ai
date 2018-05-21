@@ -34,6 +34,10 @@ def load_n_process_data(fn, title_column=1, sep='\t', context_win=2):
             lowercase=True
         )
     )
+    # simple remedy
+    missing = sentences.apply(len) == 0
+    sentences[missing] = d[missing][1].apply(lambda x: x.lower().split())
+
     words = set(list(chain.from_iterable(sentences)))
     words_hash = {v: k for k, v in enumerate(words)}
 
@@ -105,11 +109,13 @@ if __name__ == "__main__":
     if use_gensim:
         model = Word2Vec(
             sentences, size=h, window=2, min_count=1, workers=8, sg=1,
-            hs=0, negative=5, iter=30
+            hs=0, negative=15, iter=20
         )
 
         # convert gensim model to ndarray
         embedding_matrix = np.zeros((len(model.wv.vocab), h))
+        print len(model.wv.vocab)
+        print len(model.wv.index2word)
         for i in range(len(model.wv.vocab)):
             emb = model.wv[model.wv.index2word[i]]
             if emb is not None:
