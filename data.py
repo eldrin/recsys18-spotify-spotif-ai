@@ -5,6 +5,7 @@ import json
 
 import pandas as pd
 import numpy as np
+from sklearn.preprocessing import QuantileTransformer
 
 from util import read_data
 
@@ -117,9 +118,9 @@ def fetch_k_tracks(R, k, playlist_ids, order=True):
             r_trn = r_.iloc[:k]  # first k tracks of playlist
             r_tst = r_.iloc[k:]  # rest tracks for testing
         else:  # random k tracks
-            rnd_ix = np.random.permutation(r_.shape[0])
-            r_trn = r_.iloc[rnd_ix[:k]]
-            r_tst = r_.iloc[rnd_ix[k:]]
+            r__ = r_.sample(frac=1)
+            r_trn = r__.iloc[:k]
+            r_tst = r__.iloc[k:]
 
         # check up the shape & fix it
         if r_trn.ndim == 1:
@@ -148,24 +149,23 @@ def fetch_playlists_with_m_tracks(R, candidates_ids, l, m, tol=10):
     """
     r = R[R[0].isin(set(candidates_ids))]  # candidate triplets
     n_tracks = r.groupby(0).count()[1]
-    candidates = r[0].unique()[(n_tracks > m-tol) & (n_tracks <= m+tol)]
+    candidates = n_tracks[(n_tracks > m-tol) & (n_tracks <= m+tol)].index
     res = np.random.choice(candidates, l, replace=False)
     new_candidates = set(candidates_ids) - set(res)
     return res, new_candidates
 
 
-def process_simulated_testset(R, A, B, n_train, n_test, m=5):
+def process_simulated_testset(R, A, B, n_train, n_test, tol=5):
     """"""
     # add interaction value (now all 1)
     R.loc[:, 2] = 1
 
     # get subset of playlists
     # pick up training playlist
-    sampled_pl_tr = np.random.choice(R[0].unique(), n_train, replace=False)
+    sampled_pl_tr = np.random.choice(R[0].unique(), n_train + n_test, replace=False)
 
     # split train / test
-    Rtr = R[R[0].isin(set(sampled_pl_tr))]
-    # Rts = R[R[0].isin(set(sampled_pl_ts))]
+    # Rtr = R[R[0].isin(set(sampled_pl_tr))]
 
     # for split testset, do the post process for challenge set simulation
     Rts_tr = []  # the info going back to the training set (like challenge set seeds)
@@ -180,103 +180,132 @@ def process_simulated_testset(R, A, B, n_train, n_test, m=5):
     # - more specifically, the ratio between the seed:holdout in challenge set is:
     #   - seeds:  [ 0.0,  5.0,   5.0,  10.0,  10.0,   25.0,   25.0, 100.0, 100.0,   1.0]
     #   - E[h.o]: [28.6, 53.43, 58.07, 53.64, 53.68, 125.29, 126.77, 89.3,  87.57, 22.83]
-    ts_candidates = set(R[0].unique()) - set(sampled_pl_tr)
+    # ts_candidates = set(R[0].unique()) - set(sampled_pl_tr)
+    ts_candidates = sampled_pl_tr
 
     # 1) only playlist titles
-    print(1)
     cands, ts_candidates = fetch_playlists_with_m_tracks(
-        R, ts_candidates, l=n_chunk, m=30, tol=10)
+        R, ts_candidates, l=n_chunk, m=30, tol=tol)
     # r0 = Rts[Rts[0].isin(set(cands))]
     r0 = R[R[0].isin(set(cands))]
     Rts_ts.append(r0)
     r0t = r0.copy()
     r0t.loc[:, 2] = 0  # indication of no interaction observed
     Rts_tr.append(r0t)
+    print('{:d}: cand({:d}) - fetched({:d})'.format(
+        1, len(cands), r0t[0].nunique()))
 
     # 2) the first track given
-    print(2)
     cands, ts_candidates = fetch_playlists_with_m_tracks(
-        R, ts_candidates, l=n_chunk, m=23, tol=10)
+        R, ts_candidates, l=n_chunk, m=23, tol=tol)
     r1, r1t = fetch_k_tracks(R, 1, cands)
     Rts_tr.append(r1)
     Rts_ts.append(r1t)
+    print('{:d}: cand({:d}) - fetched({:d})'.format(
+        2, len(cands), r1t[0].nunique()))
 
     # 3) first 5 tracks given
-    print(3)
     cands, ts_candidates = fetch_playlists_with_m_tracks(
-        R, ts_candidates, l=n_chunk, m=60, tol=10)
+        R, ts_candidates, l=n_chunk, m=60, tol=tol)
     r2, r2t = fetch_k_tracks(R, 5, cands)
     Rts_tr.append(r2)
     Rts_ts.append(r2t)
+    print('{:d}: cand({:d}) - fetched({:d})'.format(
+        3, len(cands), r2t[0].nunique()))
 
     # 4) first 5 tracks given | NO PLAYLIST TITLE
-    print(4)
     cands, ts_candidates = fetch_playlists_with_m_tracks(
-        R, ts_candidates, l=n_chunk, m=60, tol=10)
+        R, ts_candidates, l=n_chunk, m=60, tol=tol)
     r3, r3t = fetch_k_tracks(R, 5, cands)
     Rts_tr.append(r3)
     Rts_ts.append(r3t)
+    print('{:d}: cand({:d}) - fetched({:d})'.format(
+        4, len(cands), r3t[0].nunique()))
 
     # 5) first 10 tracks given
-    print(5)
     cands, ts_candidates = fetch_playlists_with_m_tracks(
-        R, ts_candidates, l=n_chunk, m=65, tol=10)
+        R, ts_candidates, l=n_chunk, m=65, tol=tol)
     r4, r4t = fetch_k_tracks(R, 10, cands)
     Rts_tr.append(r4)
     Rts_ts.append(r4t)
+    print('{:d}: cand({:d}) - fetched({:d})'.format(
+        5, len(cands), r4t[0].nunique()))
 
     # 6) first 10 tracks given | NO PLAYLIST TITLE
-    print(6)
     cands, ts_candidates = fetch_playlists_with_m_tracks(
-        R, ts_candidates, l=n_chunk, m=65, tol=10)
+        R, ts_candidates, l=n_chunk, m=65, tol=tol)
     r5, r5t = fetch_k_tracks(R, 10, cands)
     Rts_tr.append(r5)
     Rts_ts.append(r5t)
+    print('{:d}: cand({:d}) - fetched({:d})'.format(
+        6, len(cands), r5t[0].nunique()))
 
     # 7) first 25 tracks given
-    print(7)
     cands, ts_candidates = fetch_playlists_with_m_tracks(
-        R, ts_candidates, l=n_chunk, m=150, tol=20)
+        R, ts_candidates, l=n_chunk, m=150, tol=tol)
     r6, r6t = fetch_k_tracks(R, 25, cands)
     Rts_tr.append(r6)
     Rts_ts.append(r6t)
+    print('{:d}: cand({:d}) - fetched({:d})'.format(
+        7, len(cands), r6t[0].nunique()))
 
     # 8) random 25 tracks given
-    print(8)
     cands, ts_candidates = fetch_playlists_with_m_tracks(
-        R, ts_candidates, l=n_chunk, m=150, tol=20)
+        R, ts_candidates, l=n_chunk, m=150, tol=tol)
     r7, r7t = fetch_k_tracks(R, 25, cands, order=False)
     Rts_tr.append(r7)
     Rts_ts.append(r7t)
+    print('{:d}: cand({:d}) - fetched({:d})'.format(
+        8, len(cands), r7t[0].nunique()))
 
     # 9) first 100 tracks given
-    print(9)
     cands, ts_candidates = fetch_playlists_with_m_tracks(
-        R, ts_candidates, l=n_chunk, m=200, tol=30)
+        R, ts_candidates, l=n_chunk, m=200, tol=tol)
     r8, r8t = fetch_k_tracks(R, 100, cands)
     Rts_tr.append(r8)
     Rts_ts.append(r8t)
+    print('{:d}: cand({:d}) - fetched({:d})'.format(
+        9, len(cands), r8t[0].nunique()))
 
     # 10) random 100 tracks given
-    print(10)
     cands, ts_candidates = fetch_playlists_with_m_tracks(
-        R, ts_candidates, l=n_chunk, m=200, tol=30)
+        R, ts_candidates, l=n_chunk, m=200, tol=tol)
     r9, r9t = fetch_k_tracks(R, 100, cands, order=False)
     Rts_tr.append(r9)
     Rts_ts.append(r9t)
+    print('{:d}: cand({:d}) - fetched({:d})'.format(
+        10, len(cands), r9t[0].nunique()))
 
     # aggregate test seeds into training set
-    Rtr = pd.concat([Rtr, pd.concat(Rts_tr, axis=0)], axis=0)
+    # Rtr = pd.concat([Rtr, pd.concat(Rts_tr, axis=0)], axis=0).drop_duplicates()
+    Rtr = pd.concat([R[R[0].isin(set(ts_candidates))],
+                     pd.concat(Rts_tr, axis=0)], axis=0).drop_duplicates()
     Rts = pd.concat(Rts_ts, axis=0)
+    # Rts = Rts[Rts[1].isin(set(Rtr[1].unique()))]
 
     # find playlist contain the difference between train - test tracks
     uniq_tracks_test = set(Rts[1].unique())
     uniq_tracks_train = set(Rtr[1].unique())
     diff = uniq_tracks_test - uniq_tracks_train
+    print('Before processing difference goes...')
+    print(': {:d}'.format(len(diff)))
 
     # find triplets and merge
-    additional_rtr = R[R[0].isin(set(R[R[1].isin(diff)][0]))]
+    additional_rtr = R[(R[0].isin(set(R[R[1].isin(diff)][0]))) & (R[0].isin(sampled_pl_tr))]
+    # additional_rtr = R[R[0].isin(set(R[R[1].isin(diff)][0]))]
     Rtr = pd.concat([Rtr, additional_rtr], axis=0).drop_duplicates()
+
+    # Do it again!
+    # find playlist contain the difference between train - test tracks
+    uniq_tracks_test = set(Rts[1].unique())
+    uniq_tracks_train = set(Rtr[1].unique())
+    diff = uniq_tracks_test - uniq_tracks_train
+    print('After processing difference goes...')
+    print(': {:d}'.format(len(diff)))
+
+    dup_ix = pd.concat([Rtr, Rts], axis=0).duplicated(keep='last').iloc[:-len(Rts)]
+    Rtr.loc[dup_ix, 2] = 0
+    # Rtr = pd.concat([Rtr, Rts], axis=0).drop_duplicates(keep='last')
 
     # legacies.. (just for reference)
     print('Sampling artist...')
@@ -298,7 +327,7 @@ def process_simulated_testset(R, A, B, n_train, n_test, m=5):
 
 def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
                       track_hash_fn, artist_hash_fn, playlist_title_fn,
-                      n_train=20000, n_test=100, test='external'):
+                      n_train=10000, n_test=100, test='external'):
     """"""
     print('Loading data!...')
     # 1. load main assignment file
@@ -311,7 +340,7 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     # load playlist titles
     playlists = pd.read_csv(uniq_playlist_fn, sep='\t',
                             index_col=None, header=None)
-    playlist_id2ttl = dict(playlists.as_matrix())
+    playlist_id2ttl = dict(playlists.values)
 
     # load hashes to process
     # track_hash = pd.read_csv(track_hash_fn, header=None, index_col=None, sep='\t')
@@ -320,9 +349,9 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
             map(lambda x: (x[0], x[1], int(x[2])),
                 [l.replace('\n', '').split('\t') for l in f.readlines()])
         )
-    track_uri2id = {k: v for k, v in track_hash[[0, 2]].as_matrix()}
+    track_uri2id = {k: v for k, v in track_hash[[0, 2]].values}
     track_id2uri = {v: k for k, v in track_uri2id.iteritems()}
-    track_id2ttl = {k: t for k, t in track_hash[[2, 1]].as_matrix()}
+    track_id2ttl = {k: t for k, t in track_hash[[2, 1]].values}
 
     # artist_hash = pd.read_csv(artist_hash_fn, header=None, index_col=None, sep='\t')
     with open(artist_hash_fn) as f:
@@ -330,9 +359,9 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
             map(lambda x: (x[0], x[1], int(x[2])),
                 [l.replace('\n', '').split('\t') for l in f.readlines()])
         )
-    artist_uri2id = {k: v for k, v in artist_hash[[0, 2]].as_matrix()}
+    artist_uri2id = {k: v for k, v in artist_hash[[0, 2]].values}
     artist_id2uri = {v: k for k, v in artist_uri2id.iteritems()}
-    artist_id2ttl = {k: t for k, t in artist_hash[[2, 1]].as_matrix()}
+    artist_id2ttl = {k: t for k, t in artist_hash[[2, 1]].values}
 
     # (n_attr, n_attr)
     B = pd.read_csv(b_fn, header=None, index_col=None)  # attribute relationship
@@ -404,6 +433,11 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     a.to_csv('/mnt/bulk/recsys18/artist_track_ss.csv', header=None, index=None)
     b.to_csv('/mnt/bulk/recsys18/artist_artist_ss.csv', header=None, index=None)
     f.to_csv('/mnt/bulk/recsys18/track_audio_feature_ss.csv', index=None)
+
+    # normalize feature and save
+    sclr = QuantileTransformer(1000, 'normal')
+    f = sclr.fit_transform(f)
+    np.save('/mnt/bulk/recsys18/track_audio_feature_ss.npy', f)
 
     # save hashes
     for name, dic in zip(['playlist', 'track', 'artist'], [new_pl_dict, new_tr_dict, new_ar_dict]):

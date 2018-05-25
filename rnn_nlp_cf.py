@@ -116,8 +116,8 @@ class CFRNN(nn.Module):
             )
             self.add_module(k, self.embs[k])
 
-        self.user_rnn = nn.GRU(n_hid, n_hid, n_layers, bidirectional=True, batch_first=True)
-        self.item_rnn = nn.GRU(n_hid, n_hid, n_layers, bidirectional=True, batch_first=True)
+        self.user_rnn = nn.GRU(n_hid, n_hid, n_layers, batch_first=True)
+        self.item_rnn = nn.GRU(n_hid, n_hid, n_layers, batch_first=True)
 
         if learn_metric:
             self.metric = nn.Sequential(
@@ -128,8 +128,8 @@ class CFRNN(nn.Module):
             self.add_module('metric', self.metric)
             # self.metric = nn.Linear(n_hid * 2, 1)
         else:
-            self.user_out = nn.Linear(n_hid * 2, n_out)
-            self.item_out = nn.Linear(n_hid * 2, n_out)
+            self.user_out = nn.Linear(n_hid, n_out)
+            self.item_out = nn.Linear(n_hid, n_out)
 
     def forward(self, pid, tid):
         """
@@ -149,14 +149,14 @@ class CFRNN(nn.Module):
         out_i, hid_i = self.item_rnn(emb_tr)
 
         # unpack & unsort batch order
-        # hid_u = pid.unsort(hid_u[-1])  # only take last rnn layer
-        # hid_i = tid.unsort(hid_i[-1])
-        hid_u = hid_u.permute(1, 0, 2)
-        hid_u = hid_u.view(hid_u.shape[0], -1)
-        hid_i = hid_i.permute(1, 0, 2)
-        hid_i = hid_i.view(hid_i.shape[0], -1)
-        hid_u = pid.unsort(hid_u)
-        hid_i = pid.unsort(hid_i)
+        hid_u = pid.unsort(hid_u[-1])  # only take last rnn layer
+        hid_i = tid.unsort(hid_i[-1])
+        # hid_u = hid_u.permute(1, 0, 2).contiguous()
+        # hid_u = hid_u.view(hid_u.shape[0], -1)
+        # hid_i = hid_i.permute(1, 0, 2).contiguous()
+        # hid_i = hid_i.view(hid_i.shape[0], -1)
+        # hid_u = pid.unsort(hid_u)
+        # hid_i = pid.unsort(hid_i)
 
         # obtain final estimation
         if self.learn_metric:
@@ -210,8 +210,14 @@ if __name__ == "__main__":
           .format(HP['ngram_n'], len(uniq_ngrams_pl)))
 
     # for track, we will use word2vec pretrained embedding
-    uniq_tracks = pd.read_csv(CONFIG['path']['data']['tracks'], sep='\t',
-                              index_col=None, header=None)
+    # uniq_tracks = pd.read_csv(CONFIG['path']['data']['tracks'], sep='\t',
+    #                           index_col=None, header=None)
+    with open(CONFIG['path']['data']['tracks']) as f:
+        uniq_tracks = pd.DataFrame(
+            [ll.replace('\n', '').split('\t') for ll in f.readlines()]
+        )
+        uniq_tracks.loc[:, 0] = uniq_tracks[0].astype(int)
+        uniq_tracks.loc[:, 3] = uniq_tracks[3].astype(int)
     if HP['track_emb'] == 'word2vec':
         nist = NISTTokenizer()
         titles = uniq_tracks[1].apply(
