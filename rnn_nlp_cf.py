@@ -63,6 +63,7 @@ class SeqTensor:
         X_pl = torch.cuda.LongTensor(
             [a + [0] * (max_len - len(a)) for a in seq_ngram])
         length_sorted, ind = lengths.sort(descending=True)
+        _, self.unsort_ind = ind.sort()
 
         # assign properties
         self.seq = X_pl[ind]
@@ -72,15 +73,16 @@ class SeqTensor:
     def unsort(self, h):
         """"""
         # GPU version
-        unsorted = self.ind.new(*self.ind.shape)
-        unsorted.scatter_(0, self.ind,
-                          torch.cuda.LongTensor(range(self.ind.shape[0])))
+        # unsorted = self.ind.new(*self.ind.shape)
+        # unsorted.scatter_(0, self.ind,
+        #                   torch.cuda.LongTensor(range(self.ind.shape[0])))
         # # CPU version
         # unsorted = map(
         #     lambda x:x[0],
         #     sorted(enumerate(self.ind.tolist()), key=lambda x:x[1])
         # )
-        return h[unsorted]
+        # return h[unsorted]
+        return h[self.unsort_ind]
 
 
 class CFRNN(nn.Module):
@@ -112,12 +114,13 @@ class CFRNN(nn.Module):
             emb_lyr.weight.requires_grad = train
             self.embs[k] = nn.Sequential(
                 emb_lyr,
-                nn.Linear(r, n_hid), self.non_lin()
+                nn.Linear(r, n_hid), self.non_lin(),
+                nn.Linear(n_hid, n_hid), self.non_lin()
             )
             self.add_module(k, self.embs[k])
 
-        self.user_rnn = nn.GRU(n_hid, n_hid, n_layers, batch_first=True)
-        self.item_rnn = nn.GRU(n_hid, n_hid, n_layers, batch_first=True)
+        self.user_rnn = nn.LSTM(n_hid, n_hid, n_layers, batch_first=True)
+        self.item_rnn = nn.LSTM(n_hid, n_hid, n_layers, batch_first=True)
 
         if learn_metric:
             self.metric = nn.Sequential(
@@ -149,8 +152,8 @@ class CFRNN(nn.Module):
         out_i, hid_i = self.item_rnn(emb_tr)
 
         # unpack & unsort batch order
-        hid_u = pid.unsort(hid_u[-1])  # only take last rnn layer
-        hid_i = tid.unsort(hid_i[-1])
+        hid_u = pid.unsort(hid_u[0][-1])  # only take last rnn layer
+        hid_i = tid.unsort(hid_i[0][-1])
         # hid_u = hid_u.permute(1, 0, 2).contiguous()
         # hid_u = hid_u.view(hid_u.shape[0], -1)
         # hid_i = hid_i.permute(1, 0, 2).contiguous()
@@ -177,14 +180,14 @@ class CFRNN(nn.Module):
         emb_pl = self.embs['user'](Variable(pid.seq))
         emb_pl = pack_padded_sequence(emb_pl, pid.lengths.tolist(), batch_first=True)
         out_u, hid_u = self.user_rnn(emb_pl)
-        return self.user_out(pid.unsort(hid_u[-1]))
+        return self.user_out(pid.unsort(hid_u[0][-1]))
 
     def item_factor(self, tid):
         """"""
         emb_tr = self.embs['item'](Variable(tid.seq))
         emb_tr = pack_padded_sequence(emb_tr, tid.lengths.tolist(), batch_first=True)
         out_i, hid_i = self.item_rnn(emb_tr)
-        return self.item_out(tid.unsort(hid_i[-1]))
+        return self.item_out(tid.unsort(hid_i[0][-1]))
 
 
 if __name__ == "__main__":

@@ -24,7 +24,10 @@ from tqdm import tqdm, trange
 def load_n_process_data(fn, title_column=1, sep='\t', context_win=2):
     """"""
     # load raw data
-    d = pd.read_csv(fn, sep=sep, index_col=None, header=None)
+    with open(fn) as f:
+        d = pd.DataFrame(
+            [ll.replace('\n', '').split('\t') for ll in f.readlines()]
+        )
 
     # get uniq words
     nist = NISTTokenizer()
