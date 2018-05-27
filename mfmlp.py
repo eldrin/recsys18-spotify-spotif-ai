@@ -20,12 +20,14 @@ from tqdm import tqdm, trange
 
 # from evaluation import r_precision, NDCG
 import sys
-sys.path.append('../RecsysChallengeTools/')
+sys.path.append(os.path.join(os.getcwd(), 'RecsysChallengeTools'))
 sys.path.append('./configs/')
 from metrics import ndcg, r_precision, playlist_extender_clicks
 NDCG = partial(ndcg, k=500)
 
 from mfmlp_conf import CONFIG
+from evaluation import evaluate
+from util import numpy2torchvar
 
 try:
     print(torch.cuda.current_device())
@@ -84,9 +86,15 @@ class MPDSampler:
         self.is_weight = config['hyper_parameters']['sample_weight']
         self.weight_pow = config['hyper_parameters']['sample_weight_power']
         self.threshold = config['hyper_parameters']['sample_threshold']
+        self.with_context = config['hyper_parameters']['with_context']
+        self.context_size = [1, 5, 25, 50, 100]
+        self.context_shuffle = [False, True]
 
         # prepare positive sample pools
-        self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(set))
+        if self.with_context:
+            self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(list))
+        else:
+            self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(set))
         self.pos_tracks_t = dict(self.test.groupby('playlist')['track'].apply(set))
         if self.is_weight:
             # check word (track) frequency
@@ -115,7 +123,7 @@ class MPDSampler:
         self.neg = config['hyper_parameters']['neg_sample']
         self.verbose = verbose
 
-    @background(max_prefetch=10000)
+    # @background(max_prefetch=10000)
     def generator(self):
         """"""
         if self.verbose:
@@ -124,6 +132,7 @@ class MPDSampler:
             M = self.triplet.sample(frac=1).values
 
         batch = []
+        contexts = []
         # s_pos = 240.7895  # log_surplus(1)
         s_pos = 1
         s_neg = 1
@@ -131,9 +140,16 @@ class MPDSampler:
         for u, i, v in M:
             # positive sample / yield
             pos_i = self.pos_tracks[u]
+            if self.with_context:
+                targ_i = pos_i.index(i)
+                context = pos_i[slice(targ_i-25,targ_i)]
+
             if v == 0:
                 continue
             batch.append((u, i, self.track2artist[i], 1, s_pos))
+
+            if self.with_context:
+                contexts.append(context)
 
             # draw negative samples (for-loop)
             for k in xrange(self.neg):
@@ -147,10 +163,15 @@ class MPDSampler:
 
                 # negtive sample has 0 interaction (conf==1)
                 batch.append((u, j_, self.track2artist[j_], -1, s_neg))
+                if self.with_context:
+                    contexts.append(context)
 
             # batch.append(batch_)
             if len(batch) >= self.batch_size * (1. + self.neg):
-                yield batch
+                if self.with_context:
+                    yield batch, contexts
+                else:
+                    yield batch
                 batch = []
 
 
@@ -223,6 +244,14 @@ class CFMLP(nn.Module):
                 q.view(q.shape[0], q.shape[1], 1)
             ).squeeze(1).squeeze(1)
             return y
+
+    def user_factor(self, u):
+        """"""
+        return self.mlps['user'](u)
+
+    def item_factor(self, i):
+        """"""
+        return self.mlps['item'](i)
 
 
 class GMFMLP(nn.Module):
@@ -341,8 +370,8 @@ class RecNet:
 
         # build mlp
         # load embedding and put them in Embedding layer
-        P, V, W = [
-            torch.Tensor(self.embs[a]) for a in ['U', 'V', 'W']]
+        P, V, W, X = [
+            torch.Tensor(self.embs[a]) for a in ['U', 'V', 'W', 'X']]
 
         # # make concatenated item factor
         # W = W[[self.track2artist[t] for t in xrange(V.shape[0])]]
@@ -457,7 +486,12 @@ class RecNet:
                     ndcg = []
                     for u in trg_u:
                         true = sampler.pos_tracks_t[u]
-                        true_t = sampler.pos_tracks[u]
+                        if len(true) == 0:
+                            continue
+                        if u in sampler.pos_tracks:
+                            true_t = sampler.pos_tracks[u]
+                        else:
+                            true_t = set()
                         pred = model.predict_k(u, k=500 * 2)
                         pred = filter(lambda x: x not in true_t, pred)[:500]
                         rprec.append(r_precision(list(true), pred))
@@ -479,28 +513,24 @@ class RecNet:
 
 if __name__ == "__main__":
     K = CONFIG['evaluation']['cutoff']
+    bs = CONFIG['hyper_parameters']['batch_size']
     sampler = MPDSampler(CONFIG, verbose=True)
-    # model = MFMLP(CONFIG)
-    model = RecNet(CONFIG, verbose=True)
-    model.fit(sampler)
-
-    print('Evaluate!')
-    # predict
-    trg_u = sampler.test['playlist'].unique()
-    rprec = []
-    ndcg = []
-    for u in tqdm(trg_u, total=len(trg_u), ncols=80):
-        true = sampler.pos_tracks_t[u]
-        true_t = sampler.pos_tracks[u]
-        pred = model.predict_k(u, k=K * 2)
-
-        # exclude training data
-        pred = filter(lambda x: x not in true_t, pred)[:K]
-
-        rprec.append(r_precision(list(true), pred))
-        ndcg.append(NDCG(list(true), pred))
-    rprec = filter(lambda r: r is not None, rprec)
-    ndcg = filter(lambda r: r is not None, ndcg)
-
-    print('R Precision: {:.4f}'.format(np.mean(rprec)))
-    print('NDCG: {:.4f}'.format(np.mean(ndcg)))
+    # model = RecNet(CONFIG, verbose=True)
+    # model.fit(sampler)
+    # print(evaluate(model, sampler.train, sampler.test))
+    # user_ids = range(model.core_model.n_users)
+    # U = np.concatenate(
+    #     [model.core_model.user_factor(
+    #         numpy2torchvar(user_ids[slice(u, u+bs)], 'int')
+    #     ).data.cpu().numpy()
+    #     for u in range(0, model.core_model.n_users, bs)]
+    # )
+    # item_ids = range(model.core_model.n_items)
+    # V = np.concatenate(
+    #     [model.core_model.item_factor(
+    #         numpy2torchvar(item_ids[slice(i, i+bs)], 'int')
+    #     ).data.cpu().numpy()
+    #     for i in range(0, model.core_model.n_items, bs)]
+    # )
+    # np.save('./data/sgns_U.npy', U)
+    # np.save('./data/sgns_V.npy', V)

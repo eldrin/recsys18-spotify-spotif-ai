@@ -1,72 +1,56 @@
+import os
+from functools import partial
+
 import numpy as np
+import pandas as pd
+
+from tqdm import tqdm
+
+import sys
+sys.path.append(os.path.join(os.getcwd(), 'RecsysChallengeTools'))
+from metrics import ndcg, r_precision, playlist_extender_clicks
+
+# GLOBAL SETTINGS
+CUTOFF = 500
+NDCG = partial(ndcg, k=CUTOFF)
 
 
-def r_precision(true, pred):
+def _evaluate_playlist(true, pred):
     """"""
-    numer = len(set(true).intersection(set(pred)))
-    denom = len(true)
-    return numer / float(denom) if float(denom) != 0 else None
+    return {
+        'NDCG': NDCG(list(true), pred),
+        'R_Precision': r_precision(list(true), pred),
+        'Playlist_Extender_Clicks': playlist_extender_clicks(list(true), pred)
+    }
 
 
-def NDCG(true, pred):
-    """
-    true: list of ground truth (order doesn't matter)
-    pred: list of recommendation (order matter)
-    """
-    true = set(true)
-    tp = true.intersection(set(pred))  # true positive
-    rel = [1 if p in true else 0 for p in pred]
-
-    dcg = rel[0] + sum([rel[i] / np.log2(i+1) for i in range(1, len(rel))])
-    idcg = 1. + sum([1. / np.log2(i+1) for i in range(1, len(tp))])
-
-    return dcg / float(idcg) if idcg != 0 else None  # undefined
-
-
-def clicks(true, pred):
+def _evaluate_all(trues, preds, reduce='mean'):
     """"""
-    pass
+    res = map(_evaluate_playlist, trues, preds)
+    df = pd.DataFrame(res)
+    return df.mean()
 
 
-class Evaluator:
+def evaluate(model, y, yt, cutoff=CUTOFF):
     """"""
-    def __init__(self, cutoff=500, user_sample=0.05):
-        """"""
-
-        self.user_sample = user_sample
-        self.cutoff = cutoff
-
-    def _get_relevant(self, u, Xt, A=None):
-        """"""
-        if A is None:
-            return sp.find(Xt[u])[1]
+    trg_pl = yt['playlist'].unique()
+    trues, preds = [], []
+    yt_tracks = yt.groupby('playlist')['track'].apply(set)
+    y_tracks = y[y['value']==1].groupby('playlist')['track'].apply(set)
+    for pid in tqdm(trg_pl, total=len(trg_pl), ncols=80):
+        true_ts = yt_tracks.loc[pid]
+        if pid in y_tracks.index:
+            true_tr = y_tracks.loc[pid]
         else:
-            pos_i = sp.find(Xt[u])[1]
-            all_sngs = []
-            for i in pos_i:
-                # find artists (can be many)
-                artists = sp.find(A[:, i])[0]
-                all_sngs.extend(
-                    set(sp.find(A[artists])[1].tolist())
-                )
-            return all_sngs
+            true_tr = set()
+        pred = model.predict_k(pid, k=cutoff * 2)
 
-    def run(self, model, Xt, A=None, eval_by='track',
-            measures=[NDCG, r_precision]):
-        """"""
-        assert eval_by in {'track', 'artist'}
-        assert self.eval_by == 'artist' and A is None
+        # exclude training data
+        pred = filter(lambda x: x not in true_tr, pred)[:cutoff]
 
-        rnd_u = np.random.choice(
-            Xt.shape[0], int(Xt.shape[0] * self.user_sample), replace=False)
+        trues.append(true_ts)
+        preds.append(pred)
 
-        res = {}
-        for f_ in measures:
-            y = []
-            for u in rnd_u:
-                true = self._get_relevant(u, Xt, A)
-                pred = model.predict_k(u, k=self.cutoff)
-                y.append(f_(true, pred))
-            y = filter(lambda r: r is not None, r)
-            res[f_.__name__] = np.mean(y)
-        return res
+    # calc measures
+    res = _evaluate_all(trues, preds)
+    return res

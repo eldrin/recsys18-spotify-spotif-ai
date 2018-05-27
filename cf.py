@@ -726,18 +726,19 @@ class LambdaBPRMF:
 
 class WRMF:
     """"""
-    def __init__(self, n_components, init_factor=1e-1, beta_a=1, beta=1e-1,
+    def __init__(self, n_components, init_factor=1e-1, beta=1e-1,
                  gamma=1, epsilon=1, n_epoch=10, dtype='float32',
-                 verbose=False, confidence_fn=log_surplus_confidence_matrix):
+                 verbose=False, confidence_fnc=log_surplus_confidence_matrix):
         """"""
         self.n_components_ = n_components
         self.n_epoch = n_epoch
         self.beta = beta  # regularization weight
-        self.beta_a = beta_a
+        self.init_factor = init_factor  # init weight
+
         self.gamma = gamma
         self.epsilon = epsilon
-        self.init_factor = init_factor  # init weight
-        self.confidence_fn = confidence_fn
+
+        self.confidence_fnc = confidence_fnc
         if confidence_fn == linear_surplus_confidence_matrix:
             self.confidence_fn = partial(confidence_fn, alpha=self.gamma)
         elif confidence_fn == log_surplus_confidence_matrix:
@@ -755,37 +756,30 @@ class WRMF:
         r = self.U[u].dot(self.V.T)
         return np.argsort(r)[::-1][:k]
 
-    def fit(self, X, A=None, val=None):
+    def predict(self, u, i):
+        """"""
+        return self.U[u].dot(self.V[i].T)
+
+    def fit(self, X):
         """
         X = interaction matrix
-        A = attribute matrix for item (optional)
         """
         X = X.tocsr()
-        S = self.confidence_fn(X)
+        S = self.confidence_fnc(X)
 
-        if A is None:
-            UV = factorize(S, self.n_components_, lambda_reg=self.beta,
-                           num_iterations=self.n_epoch, init_std=self.init_factor,
-                           verbose=self.verbose, dtype=self.dtype)
-            self.U_, self.V_ = UV
-            self.U = self.U_
-            self.V = self.V_
-            self.W = None
-        else:
-            UVW = cofactorize(
-                S, A, self.n_components_, lambda_a=self.beta_a,
-                lambda_reg=self.beta, num_iterations=self.n_epoch,
-                init_std=self.init_factor, verbose=self.verbose, dtype=self.dtype)
-            self.U_, self.V_, self.W_ = UVW
-            self.U = self.U_
-            self.V = self.V_
-            self.W = self.W_
+        UV = factorize(S, self.n_components_, lambda_reg=self.beta,
+                       num_iterations=self.n_epoch, init_std=self.init_factor,
+                       verbose=self.verbose, dtype=self.dtype)
+        self.U_, self.V_ = UV
 
+        # TODO: prepare mechanism for empty user / items
+        self.U = self.U_
+        self.V = self.V_
         self.b_u = None
         self.b_i = None
 
 
-class WRMF2:
+class WRMFAttrSim:
     """"""
     def __init__(self, n_components, init_factor=1e-1, beta_a=1, beta_b=1, beta=1e-1,
                  gamma=1, epsilon=1, n_epoch=10, dtype='float32',
@@ -1070,8 +1064,8 @@ def main(train_data_fn, test_data_fn, r=2, attr_fn=None, attr_fn2=None):
     # fit
     # model = KNN()
     # model = BPRMF(r, verbose=True)
-    model = WRMF(r, beta_a=1, beta=1, gamma=100, epsilon=1e-1, n_epoch=30, verbose=True)
-    # model = WRMF2(r, beta_a=1, beta_b=1, beta=1, gamma=100, epsilon=1e-1, n_epoch=20, verbose=True)
+    # model = WRMF(r, beta_a=1, beta=1, gamma=100, epsilon=1e-1, n_epoch=30, verbose=True)
+    model = WRMF2(r, beta_a=1, beta_b=1, beta=1, gamma=100, epsilon=1e-1, n_epoch=20, verbose=True)
     # model = BPRMFcpu(r, alpha=1e-1, beta=1e-5, n_epoch=2, verbose=True)
     # model = LambdaBPRMF(10, alpha=0.005, beta=5, n_epoch=2, verbose=True)
     # model = FactorizationMachine(10, alpha=1e-2, beta=0.01, batch_size=4, verbose=True)
