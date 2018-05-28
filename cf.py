@@ -25,7 +25,7 @@ from wmf import linear_surplus_confidence_matrix
 from wmf import recompute_factors_bias
 from wmf import iter_rows
 
-sys.path.append('../RecsysChallengeTools/')
+sys.path.append(os.path.join(os.getcwd(), 'RecsysChallengeTools'))
 from metrics import ndcg, r_precision, playlist_extender_clicks
 NDCG = partial(ndcg, k=500)
 
