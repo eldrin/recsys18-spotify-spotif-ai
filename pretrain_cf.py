@@ -1,3 +1,4 @@
+import os
 import numpy as np
 
 from util import read_data
@@ -9,7 +10,7 @@ import fire
 
 def main(train_fn, test_fn=None, r=10, attr_fn=None, attr_sim_fn=None,
          gamma=1, epsilon=1, n_epoch=30, cutoff=500,
-         beta=1, beta_a=1, beta_b=1):
+         beta=1, beta_a=1, beta_b=1, model_out_root=None):
     """"""
     print('Loading data...')
     d, y = read_data(train_fn)
@@ -40,9 +41,11 @@ def main(train_fn, test_fn=None, r=10, attr_fn=None, attr_sim_fn=None,
         print(res)
 
     print('Save Model...')
-    np.save('/mnt/bulk/recsys18/wrmf_U.npy', model.U)
-    np.save('/mnt/bulk/recsys18/wrmf_V.npy', model.V)
-    np.save('/mnt/bulk/recsys18/wrmf_W.npy', model.W)
+    if model_out_root is None:
+            model_out_root = os.path.join(os.getcwd(), 'data')
+    np.save(os.path.join(model_out_root, 'wrmf_U.npy'), model.U)
+    np.save(os.path.join(model_out_root, 'wrmf_V.npy'), model.V)
+    np.save(os.path.join(model_out_root, 'wrmf_W.npy'), model.W)
 
 
 if __name__ == "__main__":
