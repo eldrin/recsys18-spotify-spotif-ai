@@ -20,7 +20,7 @@ from tqdm import tqdm, trange
 
 # from evaluation import r_precision, NDCG
 import sys
-sys.path.append('../RecsysChallengeTools/')
+sys.path.append(os.path.join(os.getcwd(), 'RecsysChallengeTools/'))
 from metrics import ndcg, r_precision, playlist_extender_clicks
 NDCG = partial(ndcg, k=500)
 
