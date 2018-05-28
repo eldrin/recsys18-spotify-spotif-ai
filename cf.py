@@ -739,11 +739,11 @@ class WRMF:
         self.epsilon = epsilon
 
         self.confidence_fnc = confidence_fnc
-        if confidence_fn == linear_surplus_confidence_matrix:
-            self.confidence_fn = partial(confidence_fn, alpha=self.gamma)
-        elif confidence_fn == log_surplus_confidence_matrix:
-            self.confidence_fn = partial(
-                confidence_fn, alpha=self.gamma, epsilon=self.epsilon)
+        if confidence_fnc == linear_surplus_confidence_matrix:
+            self.confidence_fnc = partial(confidence_fnc, alpha=self.gamma)
+        elif confidence_fnc == log_surplus_confidence_matrix:
+            self.confidence_fnc = partial(
+                confidence_fnc, alpha=self.gamma, epsilon=self.epsilon)
 
         self.dtype = dtype
         self.U = None  # u factors (torch variable / (n_u, n_r))
