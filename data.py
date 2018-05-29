@@ -416,9 +416,9 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     b.loc[:, 0] = b[0].map(new_ar_hash)
     b.loc[:, 1] = b[1].map(new_ar_hash)
 
-    new_pl_dict = {v: (playlist_id2ttl[v], v, k) for k, v in enumerate(new_pl_hash)}
-    new_tr_dict = {v: (track_id2ttl[v], track_id2uri[v], k) for k, v in enumerate(new_tr_hash)}
-    new_ar_dict = {v: (artist_id2ttl[v], artist_id2uri[v], k) for k, v in enumerate(new_ar_hash)}
+    new_pl_dict = {k: (playlist_id2ttl[k], k, v) for k, v in new_pl_hash.items()}
+    new_tr_dict = {k: (track_id2ttl[k], track_id2uri[k], v) for k, v in new_tr_hash.items()}
+    new_ar_dict = {k: (artist_id2ttl[k], artist_id2uri[k], v) for k, v in new_ar_hash.items()}
 
     # print spec
     print('Rtr: ({:d}, {:d}) / sz:{:d}'.format(rtr[0].nunique(), rtr[1].nunique(), rtr.shape[0]))
@@ -446,6 +446,136 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
                 f.write("{:d}\t{}\t{}\t{}\n".format(int(k), v[0], v[1], v[2]))
 
 
+def prepare_full_data(r_fn, t_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
+                      track_hash_fn, artist_hash_fn, playlist_title_fn):
+    """
+    Args:
+        r_fn (str): training triplet (playlist, track, artist)
+        t_fn (str): challenge set
+        b_fn (str): artist-artist similarity triplet
+        f_fn (str): spotify audio feature path
+        p_fn (str): spotify track popularity path
+    """
+    print('Loading data!...')
+    # 1. load main assignment file
+    # (playlist, track, artist)
+    D = pd.read_csv(r_fn, header=None, index_col=None)
+    R = D[[0, 1]]  # playlist-track
+    A = D[[2, 1]].drop_duplicates()  # artist-track
+    A.columns = [0, 1]
+    C_ = pd.read_csv(t_fn, index_col=None, sep='\t')  # challenge set
+    C = C_[['0', '2']].copy()
+    C.columns = [0, 1]
+    C[2] = 1
+    C.iloc[:1000, 2] = 0
+
+    R[2] = 1
+    R = pd.concat([R, C], axis=0)
+
+    # load playlist titles
+    playlists = pd.read_csv(uniq_playlist_fn, sep='\t',
+                            index_col=None, header=None)
+    playlist_id2ttl = dict(
+        np.concatenate([playlists.values, C_[['0', '1']].values], axis=0))
+
+    # load hashes to process
+    # track_hash = pd.read_csv(track_hash_fn, header=None, index_col=None, sep='\t')
+    with open(track_hash_fn) as f:
+        track_hash = pd.DataFrame(
+            map(lambda x: (x[0], x[1], int(x[2])),
+                [l.replace('\n', '').split('\t') for l in f.readlines()])
+        )
+    track_uri2id = {k: v for k, v in track_hash[[0, 2]].values}
+    track_id2uri = {v: k for k, v in track_uri2id.iteritems()}
+    track_id2ttl = {k: t for k, t in track_hash[[2, 1]].values}
+
+    # artist_hash = pd.read_csv(artist_hash_fn, header=None, index_col=None, sep='\t')
+    with open(artist_hash_fn) as f:
+        artist_hash = pd.DataFrame(
+            map(lambda x: (x[0], x[1], int(x[2])),
+                [l.replace('\n', '').split('\t') for l in f.readlines()])
+        )
+    artist_uri2id = {k: v for k, v in artist_hash[[0, 2]].values}
+    artist_id2uri = {v: k for k, v in artist_uri2id.iteritems()}
+    artist_id2ttl = {k: t for k, t in artist_hash[[2, 1]].values}
+
+    # (n_attr, n_attr)
+    B = pd.read_csv(b_fn, header=None, index_col=None)  # attribute relationship
+
+    # 2. load feature data
+    F = pd.read_csv(f_fn, index_col=0)  # audio feature [spotify]
+
+    # (filling missing track and the NaN is manually done)
+    # (code is just being here for the future report purpose)
+    """
+    F = F.reindex(track_hash[0])  # filling missing tracks
+    median = F.median()
+    F = F.fillna(median)[FEATURE_COLS]
+    """
+    # get hash
+    feature_hash = {v: k for k, v in enumerate(F.index)}
+
+    # 3. load playlist / track meta features (i.e. popularity)
+    # (currently only use the track metadata)
+    P = pd.read_csv(p_fn, index_col='track_uri')
+    P = P.reindex(F.index)
+    median = P.median()
+    P = P.fillna(median)
+    F.loc[:, 'popularity'] = P['popularity']
+
+    print('Processing dataset!...')
+    # (training_set, test_set, test_id, track_artist, artist_artist)
+    rtr, a, b = R, A, B
+
+    f = F
+    median = f.median()
+    f = f.fillna(median)
+    f = pd.get_dummies(f, columns=['key', 'mode', 'time_signature'])
+
+    print('Re-indexing!...')
+    # update hashing {old_ix: new_ix}
+    new_pl_hash = {v: k for k, v in enumerate(rtr[0].unique())}
+    new_tr_hash = {v: k for k, v in enumerate(rtr[1].unique())}
+    new_ar_hash = {v: k for k, v in enumerate(a[0].unique())}
+
+    # replace old index to new index
+    rtr.loc[:, 0] = rtr[0].map(new_pl_hash)
+    rtr.loc[:, 1] = rtr[1].map(new_tr_hash)
+
+    a.loc[:, 0] = a[0].map(new_ar_hash)
+    a.loc[:, 1] = a[1].map(new_tr_hash)
+    b.loc[:, 0] = b[0].map(new_ar_hash)
+    b.loc[:, 1] = b[1].map(new_ar_hash)
+
+    # {old_ix: (title, uri, new_id?)}
+    new_pl_dict = {k: (playlist_id2ttl[k], k, v) for k, v in new_pl_hash.items()}
+    new_tr_dict = {k: (track_id2ttl[k], track_id2uri[k], v) for k, v in new_tr_hash.items()}
+    new_ar_dict = {k: (artist_id2ttl[k], artist_id2uri[k], v) for k, v in new_ar_hash.items()}
+
+    # print spec
+    print('Rtr: ({:d}, {:d}) / sz:{:d}'.format(rtr[0].nunique(), rtr[1].nunique(), rtr.shape[0]))
+    print('A: ({:d}, {:d}) / sz:{:d}'.format(a[0].nunique(), a[1].nunique(), a.shape[0]))
+    print('B: ({:d}, {:d}) / sz:{:d}'.format(b[0].nunique(), b[1].nunique(), b.shape[0]))
+
+    print('Saving!...')
+    # save results
+    rtr.to_csv('/mnt/bulk/recsys18/playlist_track_train.csv', header=None, index=None)
+    a.to_csv('/mnt/bulk/recsys18/artist_track.csv', header=None, index=None)
+    b.to_csv('/mnt/bulk/recsys18/artist_artist.csv', header=None, index=None)
+    f.to_csv('/mnt/bulk/recsys18/track_audio_feature.csv', index=None)
+
+    # normalize feature and save
+    sclr = QuantileTransformer(1000, 'normal')
+    f = sclr.fit_transform(f)
+    np.save('/mnt/bulk/recsys18/track_audio_feature.npy', f)
+
+    # save hashes
+    for name, dic in zip(['playlist', 'track', 'artist'], [new_pl_dict, new_tr_dict, new_ar_dict]):
+        with open('/mnt/bulk/recsys18/{}_hash.csv'.format(name), 'w') as f:
+            for k, v in dic.iteritems():
+                f.write("{:d}\t{}\t{}\t{}\n".format(int(k), v[0], v[1], v[2]))
+
+
 def get_ngram(word, n=3):
     """"""
     w = '#' + str(word) + '#'
@@ -461,4 +591,5 @@ def get_unique_ngrams(words, n=3, stopper='#'):
 
 if __name__ == "__main__":
     # fire.Fire(prepare_data)
-    fire.Fire(subsample_dataset)
+    # fire.Fire(subsample_dataset)
+    fire.Fire(prepare_full_data)

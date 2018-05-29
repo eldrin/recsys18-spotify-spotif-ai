@@ -45,7 +45,8 @@ def main(train_fn, test_fn=None, r=10, attr_fn=None, attr_sim_fn=None,
             model_out_root = os.path.join(os.getcwd(), 'data')
     np.save(os.path.join(model_out_root, 'wrmf_U.npy'), model.U)
     np.save(os.path.join(model_out_root, 'wrmf_V.npy'), model.V)
-    np.save(os.path.join(model_out_root, 'wrmf_W.npy'), model.W)
+    if hasattr(model, 'W'):
+        np.save(os.path.join(model_out_root, 'wrmf_W.npy'), model.W)
 
 
 if __name__ == "__main__":
