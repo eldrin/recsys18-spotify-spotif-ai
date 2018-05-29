@@ -416,9 +416,9 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     b.loc[:, 0] = b[0].map(new_ar_hash)
     b.loc[:, 1] = b[1].map(new_ar_hash)
 
-    new_pl_dict = {v: (playlist_id2ttl[v], v, k) for k, v in enumerate(new_pl_hash)}
-    new_tr_dict = {v: (track_id2ttl[v], track_id2uri[v], k) for k, v in enumerate(new_tr_hash)}
-    new_ar_dict = {v: (artist_id2ttl[v], artist_id2uri[v], k) for k, v in enumerate(new_ar_hash)}
+    new_pl_dict = {k: (playlist_id2ttl[k], k, v) for k, v in new_pl_hash.items()}
+    new_tr_dict = {k: (track_id2ttl[k], track_id2uri[k], v) for k, v in new_tr_hash.items()}
+    new_ar_dict = {k: (artist_id2ttl[k], artist_id2uri[k], v) for k, v in new_ar_hash.items()}
 
     # print spec
     print('Rtr: ({:d}, {:d}) / sz:{:d}'.format(rtr[0].nunique(), rtr[1].nunique(), rtr.shape[0]))
@@ -547,9 +547,10 @@ def prepare_full_data(r_fn, t_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     b.loc[:, 0] = b[0].map(new_ar_hash)
     b.loc[:, 1] = b[1].map(new_ar_hash)
 
-    new_pl_dict = {v: (playlist_id2ttl[v], v, k) for k, v in enumerate(new_pl_hash)}
-    new_tr_dict = {v: (track_id2ttl[v], track_id2uri[v], k) for k, v in enumerate(new_tr_hash)}
-    new_ar_dict = {v: (artist_id2ttl[v], artist_id2uri[v], k) for k, v in enumerate(new_ar_hash)}
+    # {old_ix: (title, uri, new_id?)}
+    new_pl_dict = {k: (playlist_id2ttl[k], k, v) for k, v in new_pl_hash.items()}
+    new_tr_dict = {k: (track_id2ttl[k], track_id2uri[k], v) for k, v in new_tr_hash.items()}
+    new_ar_dict = {k: (artist_id2ttl[k], artist_id2uri[k], v) for k, v in new_ar_hash.items()}
 
     # print spec
     print('Rtr: ({:d}, {:d}) / sz:{:d}'.format(rtr[0].nunique(), rtr[1].nunique(), rtr.shape[0]))
