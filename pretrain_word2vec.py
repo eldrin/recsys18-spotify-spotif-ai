@@ -19,6 +19,7 @@ from torch.nn import functional as F
 
 from prefetch_generator import background
 from tqdm import tqdm, trange
+import fire
 
 
 def load_n_process_data(fn, title_column=1, sep='\t', context_win=2):
@@ -93,30 +94,21 @@ class SkipGram(nn.Module):
         return o  # prob. over all words (HEAVY)
 
 
-if __name__ == "__main__":
-
-    h = 300
-    bs = 256
-    n_epoch = 100
-    l2 = 1e-4
-    lr = .001
-    adam_eps = 1e-5
-    train_ratio = 0.9
-    report_every = 200
-    use_gensim = True
-
+def train(track_fn, out_path, n_emb=300, batch_sz=256, n_epoch=100, l2=1e-4,
+          lr=1e-3, adam_eps=1e-5, train_ratio=0.9, report_every=200,
+          use_gensim=True):
+    """"""
     # preparing data
-    track_fn = './data/track_hash_ss.csv'
     sentences, data, words_hash = load_n_process_data(track_fn)
 
     if use_gensim:
         model = Word2Vec(
-            sentences, size=h, window=2, min_count=1, workers=8, sg=1,
+            sentences, size=n_emb, window=2, min_count=1, workers=8, sg=1,
             hs=0, negative=15, iter=20
         )
 
         # convert gensim model to ndarray
-        embedding_matrix = np.zeros((len(model.wv.vocab), h))
+        embedding_matrix = np.zeros((len(model.wv.vocab), n_emb))
         print len(model.wv.vocab)
         print len(model.wv.index2word)
         for i in range(len(model.wv.vocab)):
@@ -124,8 +116,17 @@ if __name__ == "__main__":
             if emb is not None:
                 embedding_matrix[i] = emb
         # save relavant data
-        np.save('./data/w_emb_skipgram_track_ttl_gensim.npy', embedding_matrix)
-        pkl.dump(model.wv.index2word, open('./data/track_id2word.pkl', 'wb'))
+        np.save(
+            os.path.join(
+                out_path,
+                'w_emb_skipgram_track_ttl_gensim.npy'
+            ),
+            embedding_matrix
+        )
+        pkl.dump(
+            model.wv.index2word,
+            open(os.path.join(out_path, 'track_id2word.pkl'), 'wb')
+        )
 
     else:
         # train / test split
@@ -137,7 +138,7 @@ if __name__ == "__main__":
         print('num of uniq words: {:d}'.format(len(words_hash)))
 
         # building model
-        model = SkipGram(h, len(words_hash)).cuda()
+        model = SkipGram(n_emb, len(words_hash)).cuda()
 
         # set loss / optimizer
         f_loss = nn.CrossEntropyLoss().cuda()
@@ -151,7 +152,7 @@ if __name__ == "__main__":
             k = 0  # num of update
             epoch = trange(n_epoch, ncols=80)
             for n in epoch:
-                for x, y in sample_generator(train_data, words_hash, bs):
+                for x, y in sample_generator(train_data, words_hash, batch_sz):
                     # flush grad
                     opt.zero_grad()
 
@@ -189,4 +190,8 @@ if __name__ == "__main__":
         model.eval()
 
         # save embedding
-        np.save('./data/w_emb_skipgram_track_ttl.npy', model.emb.weight.data.cpu().numpy())
+        np.save(os.path.join(out_path, 'w_emb_skipgram_track_ttl.npy'), model.emb.weight.data.cpu().numpy())
+
+
+if __name__ == "__main__":
+    fire.Fire(train)
