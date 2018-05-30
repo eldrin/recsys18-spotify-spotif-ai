@@ -38,6 +38,13 @@ def read_data(fn, delimiter=',', f_cast=int, shape=None):
     return D, ll
 
 
+def read_hash(fn):
+    """"""
+    with open(fn) as f:
+        l = [ll.replace('\n','').split('\t') for ll in f.readlines()]
+    return pd.DataFrame(l)
+
+
 def sparse2triplet(S):
     """"""
     return np.array(sp.find(S)).T
