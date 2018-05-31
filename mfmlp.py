@@ -54,17 +54,19 @@ def _load_data(config):
     }
     # dat['main'].columns = ['playlist', 'track']
     dat['train'].columns = ['playlist', 'track', 'value']  # set columns name
-    dat['test'].columns = ['playlist', 'track', 'value']
-
     dat['train'] = dat['train'][dat['train']['value'] == 1]
-    # return (
-    #     dat['main'], dat['train'], dat['test'],
-    #     dict(dat['artist2track'][[1, 0]].as_matrix())
-    # )
-    return (
-        None, dat['train'], dat['test'],
-        dict(dat['artist2track'][[1, 0]].values)
-    )
+
+    if 'test' in dat:
+        dat['test'].columns = ['playlist', 'track', 'value']
+        return (
+            None, dat['train'], dat['test'],
+            dict(dat['artist2track'][[1, 0]].values)
+        )
+    else:
+        return (
+            None, dat['train'], None,
+            dict(dat['artist2track'][[1, 0]].values)
+        )
 
 
 def log_surplus(x, alpha=100, eps=0.1):
@@ -95,7 +97,10 @@ class MPDSampler:
             self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(list))
         else:
             self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(set))
-        self.pos_tracks_t = dict(self.test.groupby('playlist')['track'].apply(set))
+
+        if self.test is not None:
+            self.pos_tracks_t = dict(self.test.groupby('playlist')['track'].apply(set))
+
         if self.is_weight:
             # check word (track) frequency
             track_count = self.triplet.groupby('track').count()['playlist']
@@ -480,7 +485,7 @@ class RecNet:
                             '[loss : {:.4f}]'.format(float(loss))
                         )
 
-                if self.eval_while_fit:
+                if self.eval_while_fit and sampler.test is not None:
                     trg_u = sampler.test['playlist'].unique()
                     rprec = []
                     ndcg = []

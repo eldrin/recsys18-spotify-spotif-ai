@@ -5,6 +5,9 @@ from collections import namedtuple
 import cPickle as pkl
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 from sklearn.utils import shuffle
 
 from nltk.tokenize.nist import NISTTokenizer
@@ -27,7 +30,7 @@ NDCG = partial(ndcg, k=500)
 from mfmlp import MPDSampler, NEGCrossEntropyLoss
 from data import get_ngram, get_unique_ngrams
 from pretrain_word2vec import load_n_process_data
-from cfrnn_conf import CONFIG
+from cfrnn_conf_insy import CONFIG
 
 try:
     print(torch.cuda.current_device())
@@ -283,6 +286,7 @@ if __name__ == "__main__":
 
     # main training loop
     model.train()
+    losses = []
     try:
         epoch = trange(HP['num_epochs'], ncols=80)
         for n in epoch:
@@ -328,15 +332,12 @@ if __name__ == "__main__":
                 epoch.set_description(
                     '[loss : {:.3f}]'.format(float(l.data))
                 )
+                losses.append(float(l.data))
 
     except KeyboardInterrupt:
         print('[Warning] User stopped the training!')
     # switch off to evaluation mode
     model.eval()
-
-    print('Evaluate!')
-    # fetch testing playlists
-    trg_u = sampler.test['playlist'].unique()
 
     # 1) extract playlist / track factors first from embedding-rnn blocks
     b = 500
@@ -350,7 +351,7 @@ if __name__ == "__main__":
         tid_ = SeqTensor([track_dict[jj] for jj in tid[j:j+b]], None, None)
         Q.append(model.item_factor(tid_).data.cpu().numpy())
     Q = np.concatenate(Q, axis=0)
-    np.save('./data/title_rnn_V.npy', Q)
+    np.save('/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/title_rnn_V.npy', Q)
 
     #   1.2) ext playlist factors
     n = uniq_playlists.shape[0]
@@ -362,34 +363,43 @@ if __name__ == "__main__":
         pid_ = SeqTensor([playlist_dict[jj] for jj in pid[j:j+b]], None, None)
         P.append(model.user_factor(pid_).data.cpu().numpy())
     P = np.concatenate(P, axis=0)
-    np.save('./data/title_rnn_U.npy', P)
+    np.save('/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/title_rnn_U.npy', P)
 
-    #   2) calculate scores using the same way of MLP case
-    rprec = []
-    ndcg = []
-    for j, u in tqdm(enumerate(trg_u), total=len(trg_u), ncols=80):
-        true = sampler.test[sampler.test['playlist'] == u]['track']
-        true_t = set(sampler.train[sampler.train['playlist'] == u]['track'])
+    if sampler.test is not None:
+        print('Evaluate!')
+        # fetch testing playlists
+        trg_u = sampler.test['playlist'].unique()
 
-        # predict k
-        if model.learn_metric:
-            cat = np.concatenate([np.tile(P[u], (Q.shape[0], 1)), Q], axis=-1)
-        pred = []
-        for k in trange(0, m, b, ncols=80):
+        #   2) calculate scores using the same way of MLP case
+        rprec = []
+        ndcg = []
+        for j, u in tqdm(enumerate(trg_u), total=len(trg_u), ncols=80):
+            true = sampler.test[sampler.test['playlist'] == u]['track']
+            true_t = set(sampler.train[sampler.train['playlist'] == u]['track'])
+
+            # predict k
             if model.learn_metric:
-                pred.append(model.metric(Variable(torch.cuda.FloatTensor(cat[k:k+b])))[:, 0].data)
-            else:
-                pred.append(P[u].dot(Q[k:k+b].T))
-        pred = np.concatenate(pred, axis=0)
-        ind = np.argsort(pred)[::-1][:1000]
+                cat = np.concatenate([np.tile(P[u], (Q.shape[0], 1)), Q], axis=-1)
+            pred = []
+            for k in trange(0, m, b, ncols=80):
+                if model.learn_metric:
+                    pred.append(model.metric(Variable(torch.cuda.FloatTensor(cat[k:k+b])))[:, 0].data)
+                else:
+                    pred.append(P[u].dot(Q[k:k+b].T))
+            pred = np.concatenate(pred, axis=0)
+            ind = np.argsort(pred)[::-1][:1000]
 
-        # exclude training data
-        pred = filter(lambda x: x not in true_t, ind)[:500]
+            # exclude training data
+            pred = filter(lambda x: x not in true_t, ind)[:500]
 
-        rprec.append(r_precision(true, pred))
-        ndcg.append(NDCG(true, pred))
-    rprec = filter(lambda r: r is not None, rprec)
-    ndcg = filter(lambda r: r is not None, ndcg)
+            rprec.append(r_precision(true, pred))
+            ndcg.append(NDCG(true, pred))
+        rprec = filter(lambda r: r is not None, rprec)
+        ndcg = filter(lambda r: r is not None, ndcg)
 
-    print('R Precision: {:.4f}'.format(np.mean(rprec)))
-    print('NDCG: {:.4f}'.format(np.mean(ndcg)))
+        print('R Precision: {:.4f}'.format(np.mean(rprec)))
+        print('NDCG: {:.4f}'.format(np.mean(ndcg)))
+
+    # 3) print out the loss evolution as a image
+    plt.plot(losses)
+    plt.savefig('./data/losses.png')
