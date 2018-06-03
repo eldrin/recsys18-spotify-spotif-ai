@@ -9,7 +9,7 @@ from util import read_hash
 from tqdm import trange, tqdm
 import fire
 
-def main(out_fn, pl_fac_fn, tr_fac_fn, pl_hash_fn, tr_hash_fn, challenge_path, batch_size=100):
+def main(out_fn, pl_fac_fn, tr_fac_fn, pl_hash_fn, tr_hash_fn, challenge_path, n_rec=500, batch_size=100):
     """"""
     # load hashes (fac_id >> org_id)
     pl_hash = {int(k): v for k, v in read_hash(pl_hash_fn)[[3, 2]].values}
