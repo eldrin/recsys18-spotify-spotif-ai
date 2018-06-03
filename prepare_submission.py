@@ -1,4 +1,5 @@
 import os
+import cPickle as pkl
 import json
 
 import pandas as pd
@@ -30,7 +31,8 @@ def main(out_fn, pl_fac_fn, tr_fac_fn, pl_hash_fn, tr_hash_fn, challenge_path, n
     # predict!
     sanity = {}
     predictions = {}
-    n_cand = 1000
+    query_tracks = {}
+    n_cand = int(n_rec * 1.5)
     for ix in trange(0, queries.shape[0], batch_size, ncols=80):
     # for ix in trange(2000, 3000, batch_size, ncols=80):
         qry_slc = queries.iloc[slice(ix, ix+batch_size)]
@@ -51,15 +53,17 @@ def main(out_fn, pl_fac_fn, tr_fac_fn, pl_hash_fn, tr_hash_fn, challenge_path, n
 
             # unhashing (fac_id >> uri) (filter out queries)
             preds = [tr_hash[p] for p in pred_raw]
-            pred = filter(lambda tr: tr not in tracks_set, preds)[:500]
+            pred = filter(lambda tr: tr not in tracks_set, preds)[:n_rec]
             predictions[pid] = pred
+            query_tracks[pid] = tracks_set
 
             # sanity check
             sanity[pid] = bool(len(pred) < n_cand)
-
     print('Sanity: {:d} / {:d}'.format(sum(sanity.values()), len(sanity)))
 
     # writing submission file
+    pkl.dump(query_tracks,
+             open(os.path.join(os.path.dirname(out_fn), 'queries.pkl'), 'wb'))
     with open(out_fn, 'w') as f:
         f.write("team_info,creative,spotif.ai,J.H.Kim@tudelft.nl\n")
         for pid, track_uris in tqdm(predictions.items(), ncols=80):
