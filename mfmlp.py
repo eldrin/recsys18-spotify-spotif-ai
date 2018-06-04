@@ -54,7 +54,7 @@ def _load_data(config):
     }
     # dat['main'].columns = ['playlist', 'track']
     dat['train'].columns = ['playlist', 'track', 'value']  # set columns name
-    dat['train'] = dat['train'][dat['train']['value'] == 1]
+    # dat['train'] = dat['train'][dat['train']['value'] == 1]
 
     if 'test' in dat:
         dat['test'].columns = ['playlist', 'track', 'value']
@@ -92,11 +92,10 @@ class MPDSampler:
         self.context_size = [1, 5, 25, 50, 100]
         self.context_shuffle = [False, True]
 
+        self.triplet = self.triplet[self.triplet['value'] == 1]
+
         # prepare positive sample pools
-        if self.with_context:
-            self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(list))
-        else:
-            self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(set))
+        self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(set))
 
         if self.test is not None:
             self.pos_tracks_t = dict(self.test.groupby('playlist')['track'].apply(set))
@@ -145,15 +144,13 @@ class MPDSampler:
         for u, i, v in M:
             # positive sample / yield
             pos_i = self.pos_tracks[u]
-            if self.with_context:
-                targ_i = pos_i.index(i)
-                context = pos_i[slice(targ_i-25,targ_i)]
 
             if v == 0:
                 continue
             batch.append((u, i, self.track2artist[i], 1, s_pos))
 
             if self.with_context:
+                context = pos_i - set([i])
                 contexts.append(context)
 
             # draw negative samples (for-loop)
@@ -175,6 +172,7 @@ class MPDSampler:
             if len(batch) >= self.batch_size * (1. + self.neg):
                 if self.with_context:
                     yield batch, contexts
+                    contexts = []
                 else:
                     yield batch
                 batch = []
