@@ -24,7 +24,7 @@ sys.path.append(os.path.join(os.getcwd(), 'RecsysChallengeTools'))
 from metrics import ndcg, r_precision, playlist_extender_clicks
 NDCG = partial(ndcg, k=500)
 
-from mfmlp import MPDSampler, NEGCrossEntropyLoss
+from mfmlp import MPDSampler, NEGCrossEntropyLoss, CFMLP
 from data import get_ngram, get_unique_ngrams
 from pretrain_word2vec import load_n_process_data
 from rnn_nlp_cf import SeqTensor
@@ -128,18 +128,26 @@ if __name__ == "__main__":
         n_out=HP['n_out_embedding'],
         non_lin=HP['non_lin'],
         n_users=sampler.n_playlists, n_items=sampler.n_tracks,
-        user_emb=None, item_emb=None, user_train=True, item_train=True,
+        user_emb=None, item_emb=X, user_train=True, item_train=False,
         learn_metric=HP['learn_metric']
     ).cuda()
 
+    mf = CFMLP(
+        n_components=HP['n_out_embedding'], architecture=[],
+        n_users=sampler.n_playlists, n_items=sampler.n_tracks,
+        user_train=True, item_train=True,
+        user_emb=None, item_emb=None, learn_metric=False).cuda()
+
+    params = filter(lambda p: p.requires_grad, model.parameters())
+    params += filter(lambda p: p.requires_grad, mf.parameters())
+
     # set loss / optimizer
     f_loss = NEGCrossEntropyLoss().cuda()
-    opt = HP['optimizer'](
-        filter(lambda p: p.requires_grad, model.parameters()),
-        weight_decay=HP['l2'], lr=HP['learn_rate'])
+    opt = HP['optimizer'](params, weight_decay=HP['l2'], lr=HP['learn_rate'])
 
     # main training loop
     model.train()
+    mf.train()
     try:
         epoch = trange(HP['num_epochs'], ncols=80)
         for n in epoch:
@@ -149,6 +157,7 @@ if __name__ == "__main__":
 
                 # parse in / out
                 pid, tid = batch_t[:2]
+                pid = torch.cuda.LongTensor(pid)
                 tid = torch.cuda.LongTensor(tid)
                 pref, conf = [
                     torch.cuda.FloatTensor(a) for a in batch_t[-2:]]
@@ -158,6 +167,7 @@ if __name__ == "__main__":
 
                 # forward pass
                 y_pred = model.forward(pid, tid, C)
+                y_pred += mf.forward(pid, tid)
 
                 # calc loss
                 l = f_loss(y_pred, Variable(pref))
@@ -176,6 +186,7 @@ if __name__ == "__main__":
         print('[Warning] User stopped the training!')
     # switch off to evaluation mode
     model.eval()
+    mf.eval()
 
     b = 512
 
@@ -189,10 +200,11 @@ if __name__ == "__main__":
         else:
             m_ = i+b
 
+        tid_ = torch.cuda.LongTensor(range(i, m_))
         Q.append(
-            model._item_out(
-                torch.cuda.LongTensor(range(i, m_))
-            ).data.cpu().numpy()
+            torch.cat([
+                mf.mlps['item'](tid_), model._item_out(tid_)
+            ], dim=1).data.cpu().numpy()
         )
     Q = np.concatenate(Q, axis=0)
     print(Q.shape)
@@ -209,7 +221,10 @@ if __name__ == "__main__":
             else:
                 plst.append(np.random.choice(10000, 10).tolist())
         C = SeqTensor(plst)
-        P.append(model._user_out(C).data.cpu().numpy())
+        P.append(
+            torch.cat([
+                mf.mlps['user'](torch.cuda.LongTensor(m[slice(i, i+b)])),
+                model._user_out(C)], dim=1).data.cpu().numpy())
     P = np.concatenate(P, axis=0)
     print(P.shape)
     # np.save('./data/cnn_U.npy', Q)
