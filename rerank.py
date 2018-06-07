@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import pandas as pd
 from scipy.spatial import distance as dist
@@ -18,16 +19,27 @@ def get_score(distance, ranking_score_template):
     """"""
     return np.log(
         ranking_score_template[distance.argsort(1).argsort(1)]
-    ).mean(0)    
+    ).mean(0)
 
 
-def from_mf(out_fn, user_factor_fn, item_factor_fn, artist_factor_fn,
-            challenge_query_pkl, track_hash_fn, playlist_hash_fn,
-            artist_track_fn, dist_fnc='cosine'):
+def from_mf(config_fn, alpha=5, cutoff=50000, dist_fnc='cosine'):
     """"""
+    # load config
+    config = json.load(open(config_fn))
+
+    # parse
+    out_fn = config["out_fn"]
+    user_factor_fn = config["user_factor_fn"]
+    item_factor_fn = config["item_factor_fn"]
+    artist_factor_fn = config["artist_factor_fn"]
+    challenge_set_fn = config["challenge_set_fn"]
+    track_hash_fn = config["track_hash_fn"]
+    playlist_hash_fn = config["playlist_hash_fn"]
+    artist_track_fn = config["artist_track_fn"]
+
     # load track hash
     pl_hash = read_hash(playlist_hash_fn)
-    pid2pl = {v:int(k) for k, v in pl_hash[[3, 2]].values}
+    pid2pl = {int(v):int(k) for k, v in pl_hash[[3, 2]].values}
 
     tr_hash = read_hash(track_hash_fn)
     uri2tr = {v:int(k) for k, v in tr_hash[[3, 2]].values}
@@ -46,7 +58,14 @@ def from_mf(out_fn, user_factor_fn, item_factor_fn, artist_factor_fn,
     W = W[[tr2art[i] for i in xrange(Q.shape[0])]]
 
     # load seeds
-    seeds = pkl.load(open(challenge_query_pkl))
+    challenge_set= json.load(open(challenge_set_fn))
+    seeds = dict(
+        map(
+            lambda x:
+            (x['pid'], set(map(lambda y: y['track_uri'], x['tracks']))),
+            challenge_set['playlists']
+        )
+    )
 
     # pre-calc rank score
     r_s = simple_rank_score(np.arange(1., Q.shape[0]+1))
@@ -63,7 +82,7 @@ def from_mf(out_fn, user_factor_fn, item_factor_fn, artist_factor_fn,
         org_score = np.log(r_s[D.argsort(axis=1).argsort(axis=1)])
 
         if len(seed) > 0:
-            r = org_score[0].argsort()[::-1]
+            r = org_score[0].argsort()[::-1][:cutoff]
 
             # process artist-base re-ranking
             wq = W[[tr2art[uri2tr[uri]] for uri in seed]]
@@ -78,8 +97,8 @@ def from_mf(out_fn, user_factor_fn, item_factor_fn, artist_factor_fn,
             new_score = org_score[0, r] + alpha * np.mean(aux_scores, axis=0)
             new_rank = r[np.argsort(new_score)[::-1]]
         else:
-            new_rank = org_score[0].argsort()[::-1]
-        
+            new_rank = org_score[0].argsort()[::-1][cutoff]
+
         # get new recommendation
         track_uris = filter(
             lambda rec: rec not in seed,
@@ -87,7 +106,7 @@ def from_mf(out_fn, user_factor_fn, item_factor_fn, artist_factor_fn,
         )[:500]
 
         # write down to file
-        f.write("{:d},".format(pid) + ",".join(track_uris) + "\n")    
+        f.write("{:d},".format(pid) + ",".join(track_uris) + "\n")
     f.close()
 
 
