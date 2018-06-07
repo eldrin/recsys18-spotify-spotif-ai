@@ -14,6 +14,83 @@ def simple_rank_score(rank):
     return 1. / np.log(rank + 1.)
 
 
+def get_score(distance, ranking_score_template):
+    """"""
+    return np.log(
+        ranking_score_template[distance.argsort(1).argsort(1)]
+    ).mean(0)    
+
+
+def from_mf(out_fn, user_factor_fn, item_factor_fn, artist_factor_fn,
+            challenge_query_pkl, track_hash_fn, playlist_hash_fn,
+            artist_track_fn, dist_fnc='cosine'):
+    """"""
+    # load track hash
+    pl_hash = read_hash(playlist_hash_fn)
+    pid2pl = {v:int(k) for k, v in pl_hash[[3, 2]].values}
+
+    tr_hash = read_hash(track_hash_fn)
+    uri2tr = {v:int(k) for k, v in tr_hash[[3, 2]].values}
+    tr2uri = {v:k for k, v in uri2tr.iteritems()}
+
+    # load artist hash
+    art2tr = pd.read_csv(artist_track_fn, header=None)
+    tr2art = dict(art2tr[[1, 0]].values)
+
+    # load MF model
+    P = np.load(user_factor_fn)
+    Q = np.load(item_factor_fn)
+
+    # reranking source
+    W = np.load(artist_factor_fn)
+    W = W[[tr2art[i] for i in xrange(Q.shape[0])]]
+
+    # load seeds
+    seeds = pkl.load(open(challenge_query_pkl))
+
+    # pre-calc rank score
+    r_s = simple_rank_score(np.arange(1., Q.shape[0]+1))
+    r_s /= r_s.sum()
+
+    # running naive-reranking
+    # re-write re-ranked result
+    f = open(out_fn, 'w')
+    f.write("team_info,creative,spotif.ai,J.H.Kim@tudelft.nl\n")
+    new_rec = {}
+    for pid, seed in tqdm(seeds.iteritems(), total=len(seeds), ncols=80):
+
+        D = -P[pid2pl[pid]].dot(Q.T)[None]
+        org_score = np.log(r_s[D.argsort(axis=1).argsort(axis=1)])
+
+        if len(seed) > 0:
+            r = org_score[0].argsort()[::-1]
+
+            # process artist-base re-ranking
+            wq = W[[tr2art[uri2tr[uri]] for uri in seed]]
+            qq = Q[[uri2tr[uri] for uri in seed]]
+
+            # get distance mat
+            aux_scores = []
+            aux_scores.append(get_score(dist.cdist(wq, W[r], metric=dist_fnc), r_s))
+            aux_scores.append(get_score(dist.cdist(qq, Q[r], metric=dist_fnc), r_s))
+
+            # get averaged re-rank score
+            new_score = org_score[0, r] + alpha * np.mean(aux_scores, axis=0)
+            new_rank = r[np.argsort(new_score)[::-1]]
+        else:
+            new_rank = org_score[0].argsort()[::-1]
+        
+        # get new recommendation
+        track_uris = filter(
+            lambda rec: rec not in seed,
+            [tr2uri[j] for j in new_rank[:600]]
+        )[:500]
+
+        # write down to file
+        f.write("{:d},".format(pid) + ",".join(track_uris) + "\n")    
+    f.close()
+
+
 def main(init_rank_path, challenge_query_pkl, artist_factor_fn,
          track_hash_fn, artist_track_fn):
     """"""
@@ -73,4 +150,5 @@ def main(init_rank_path, challenge_query_pkl, artist_factor_fn,
 
 
 if __name__ == "__main__":
-    fire.Fire(main)
+    # fire.Fire(main)
+    fire.Fire(from_mf)
