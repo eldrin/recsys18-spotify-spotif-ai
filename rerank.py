@@ -22,7 +22,7 @@ def get_score(distance, ranking_score_template):
     ).mean(0)
 
 
-def from_mf(config_fn, alpha=5, cutoff=50000, dist_fnc='cosine'):
+def from_mf(config_fn, alpha=1e-4, cutoff=50000, dist_fnc='cosine'):
     """"""
     # load config
     config = json.load(open(config_fn))
@@ -71,6 +71,9 @@ def from_mf(config_fn, alpha=5, cutoff=50000, dist_fnc='cosine'):
     r_s = simple_rank_score(np.arange(1., Q.shape[0]+1))
     r_s /= r_s.sum()
 
+    r_s_cutoff = simple_rank_score(np.arange(1, cutoff+1))
+    r_s_cutoff /= r_s_cutoff.sum()
+
     # running naive-reranking
     # re-write re-ranked result
     f = open(out_fn, 'w')
@@ -89,15 +92,18 @@ def from_mf(config_fn, alpha=5, cutoff=50000, dist_fnc='cosine'):
             qq = Q[[uri2tr[uri] for uri in seed]]
 
             # get distance mat
-            aux_scores = []
-            aux_scores.append(get_score(dist.cdist(wq, W[r], metric=dist_fnc), r_s))
-            aux_scores.append(get_score(dist.cdist(qq, Q[r], metric=dist_fnc), r_s))
+            # aux_scores = []
+            # aux_scores.append(get_score(dist.cdist(wq, W[r], metric=dist_fnc), r_s_cutoff))
+            # aux_scores.append(get_score(dist.cdist(qq, Q[r], metric=dist_fnc), r_s_cutoff))
+            st1 = get_score(dist.cdist(wq, W[r], metric=dist_fnc), r_s_cutoff)
+            st2 = get_score(dist.cdist(qq, Q[r], metric=dist_fnc), r_s_cutoff)
 
             # get averaged re-rank score
-            new_score = org_score[0, r] + alpha * np.mean(aux_scores, axis=0)
+            # new_score = org_score[0, r] + alpha * np.mean(aux_scores, axis=0)
+            new_score = r_s_cutoff + alpha * (0.3 * st1 + 0.7 * st2)
             new_rank = r[np.argsort(new_score)[::-1]]
         else:
-            new_rank = org_score[0].argsort()[::-1][cutoff]
+            new_rank = org_score[0].argsort()[::-1][:cutoff]
 
         # get new recommendation
         track_uris = filter(
