@@ -13,6 +13,7 @@ from util import sparse2triplet
 # from evaluation import r_precision, NDCG
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.neighbors import NearestNeighbors
+from sklearn.decomposition import TruncatedSVD
 
 from tqdm import trange, tqdm
 import fire
@@ -198,6 +199,20 @@ class KNN:
         """"""
         dist, indx = self.nn.kneighbors(self.X[u], n_neighbors=k)
         return indx.ravel()
+
+
+class TSVD:
+    def __init__(self, n_components):
+        self.model = TruncatedSVD(n_components)
+
+    def fit(self, X):
+        self.P = self.model.fit_transform(X)
+        self.Q = self.model.components_
+
+    def predict_k(self, u, k=500):
+        """"""
+        r = self.P[u].dot(self.Q.T)
+        return np.argsort(r)[::-1][:k]
 
 
 class BPRMF:
