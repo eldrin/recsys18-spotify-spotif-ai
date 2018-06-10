@@ -42,6 +42,15 @@ def swish(x):
     return x * x.sigmoid()
 
 
+def mask_softmax(a, dim, epsilon=1e-8):
+    """"""
+    a_max = torch.max(a, dim=dim, keepdim=True)[0]
+    a_exp = torch.exp(a - a_max)
+    a_exp = a_exp * (a == 0).float()
+    a_softmax = a_exp / (torch.sum(a_exp, dim=dim, keepdim=True) + epsilon)
+    return a_softmax
+
+
 class ItemAttentionCF(nn.Module):
     """"""
     def __init__(self, n_components, n_users, n_items,user_emb, item_emb,
@@ -64,34 +73,51 @@ class ItemAttentionCF(nn.Module):
             self.tr_emb = nn.Embedding(n_items, self.n_out)
         self.tr_emb.weight.requires_grad = item_train
 
+        # track (out) embedding
+        self.out_emb = nn.Embedding(n_items, self.n_out)
+        self.out_emb.weight.requires_grad = True
+
         # playlist embedding
         self.proj = nn.Linear(self.tr_emb.embedding_dim, n_hid)
-        self.proj_t = nn.Linear(self.tr_emb.embedding_dim, self.n_out)
         self.att_w = nn.Linear(n_hid, n_hid)
         self.att_h = nn.Linear(n_hid, 1)
 
-        self.pl_emb = nn.Linear(n_hid, self.n_out)
+        self.pl_emb1 = nn.Linear(n_hid, self.n_out)
+        self.pl_emb2 = nn.Linear(n_hid, self.n_out)
+
+    def _item_attention(self, contexts):
+        """"""
+        # get context embedding
+        x = self.tr_emb(Variable(contexts.seq))  # (n_batch, n_seeds', n_embs)
+        x = swish(self.proj(x))  # (n_batch, n_seeds', n_hid)
+
+        # FC Attention
+        z = swish(self.att_w(x))  # (n_batch, n_seeds', n_hid)
+        a = mask_softmax(self.att_h(z).squeeze(), dim=1)
+
+        return x, a
 
     def _user_out(self, contexts):
         """"""
-        # get context embedding
-        x = self.tr_emb(Variable(contexts.seq))  # (n_batch, n_steps, n_embs)
-        x = swish(self.proj(x))
+        # get context embedding / attention
+        x, a = self._item_attention(contexts)
 
-        # FC Attention
-        z = swish(self.att_w(x))
-        a = F.softmax(self.att_h(z).squeeze(), dim=1)[:, :, None]
-        x = torch.sum(x * a, dim=1).squeeze()
+        # get 1nd order momentum (mean)
+        x1 = torch.bmm(a[:, None, :], x).squeeze()
+
+        # get 2nd order factor with attentional sum
+        sum_x_sqr = x1**2
+        sum_sqr_x = torch.bmm(a[:, None, :]**2, x**2).squeeze()
+        x2 = 0.5 * (sum_x_sqr - sum_sqr_x)  # covariance
 
         # OUT FC (playlist embedding)
-        x = self.pl_emb(x)  # (n_batch, dim_emb)
+        x = self.pl_emb1(x1) + self.pl_emb2(x2)  # (n_batch, dim_emb)
 
         return x
 
     def _item_out(self, tid):
         """"""
-        y = self.tr_emb(tid)  # (n_batch, dim_emb)
-        y = self.proj_t(swish(y))
+        y = self.out_emb(tid)  # (n_batch, dim_emb)
         return y
 
     def forward(self, pid, tid, contexts):
@@ -118,7 +144,8 @@ if __name__ == "__main__":
     HP = CONFIG['hyper_parameters']
 
     # load audio_feature
-    X = np.load(CONFIG['path']['embeddings']['X'])
+    # X = np.load(CONFIG['path']['embeddings']['X'])
+    X = np.load(CONFIG['path']['embeddings']['V'])
 
     # prepare model instances
     sampler = MPDSampler(CONFIG, verbose=True)
@@ -132,14 +159,15 @@ if __name__ == "__main__":
         learn_metric=HP['learn_metric']
     ).cuda()
 
-    mf = CFMLP(
-        n_components=HP['n_out_embedding'], architecture=[],
-        n_users=sampler.n_playlists, n_items=sampler.n_tracks,
-        user_train=True, item_train=True,
-        user_emb=None, item_emb=None, learn_metric=False).cuda()
+    # mf = CFMLP(
+    #     n_components=HP['n_out_embedding'], architecture=[],
+    #     n_users=sampler.n_playlists, n_items=sampler.n_tracks,
+    #     user_train=True, item_train=True,
+    #     user_emb=None, item_emb=None, learn_metric=False
+    # ).cuda()
 
     params = filter(lambda p: p.requires_grad, model.parameters())
-    params += filter(lambda p: p.requires_grad, mf.parameters())
+    # params += filter(lambda p: p.requires_grad, mf.parameters())
 
     # set loss / optimizer
     f_loss = NEGCrossEntropyLoss().cuda()
@@ -147,7 +175,7 @@ if __name__ == "__main__":
 
     # main training loop
     model.train()
-    mf.train()
+    # mf.train()
     try:
         epoch = trange(HP['num_epochs'], ncols=80)
         for n in epoch:
@@ -167,7 +195,7 @@ if __name__ == "__main__":
 
                 # forward pass
                 y_pred = model.forward(pid, tid, C)
-                y_pred += mf.forward(pid, tid)
+                # y_pred += mf.forward(pid, tid)
 
                 # calc loss
                 l = f_loss(y_pred, Variable(pref))
@@ -186,7 +214,7 @@ if __name__ == "__main__":
         print('[Warning] User stopped the training!')
     # switch off to evaluation mode
     model.eval()
-    mf.eval()
+    # mf.eval()
 
     b = 512
 
@@ -200,12 +228,13 @@ if __name__ == "__main__":
         else:
             m_ = i+b
 
-        tid_ = torch.cuda.LongTensor(range(i, m_))
-        Q.append(
-            torch.cat([
-                mf.mlps['item'](tid_), model._item_out(tid_)
-            ], dim=1).data.cpu().numpy()
-        )
+        tid_ = Variable(torch.cuda.LongTensor(range(i, m_)))
+        # Q.append(
+        #     torch.cat([
+        #         mf.mlps['item'](tid_), model._item_out(tid_)
+        #     ], dim=1).data.cpu().numpy()
+        # )
+        Q.append(model._item_out(tid_).data.cpu().numpy())
     Q = np.concatenate(Q, axis=0)
     print(Q.shape)
     np.save('./data/cnn_V.npy', Q)
@@ -221,10 +250,11 @@ if __name__ == "__main__":
             else:
                 plst.append(np.random.choice(10000, 10).tolist())
         C = SeqTensor(plst)
-        P.append(
-            torch.cat([
-                mf.mlps['user'](torch.cuda.LongTensor(m[slice(i, i+b)])),
-                model._user_out(C)], dim=1).data.cpu().numpy())
+        # P.append(
+        #     torch.cat([
+        #         mf.mlps['user'](Variable(torch.cuda.LongTensor(m[slice(i, i+b)]))),
+        #         model._user_out(C)], dim=1).data.cpu().numpy())
+        P.append(model._user_out(C).data.cpu().numpy())
     P = np.concatenate(P, axis=0)
     print(P.shape)
     # np.save('./data/cnn_U.npy', Q)
