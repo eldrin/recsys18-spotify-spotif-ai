@@ -30,7 +30,8 @@ NDCG = partial(ndcg, k=500)
 from mfmlp import MPDSampler, NEGCrossEntropyLoss
 from data import get_ngram, get_unique_ngrams
 from pretrain_word2vec import load_n_process_data
-from cfrnn_conf_insy import CONFIG
+# from cfrnn_conf_insy import CONFIG
+from cfrnn_conf import CONFIG
 
 try:
     print(torch.cuda.current_device())
