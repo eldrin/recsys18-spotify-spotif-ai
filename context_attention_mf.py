@@ -87,8 +87,13 @@ class ItemAttentionCF(nn.Module):
 
     def _item_attention(self, contexts):
         """"""
+        # get mask
+        mask = (contexts != -1).float()  # (n_batch, n_seeds') ~ {0, 1}
+        contexts[contexts == -1] = 0
+
         # get context embedding
-        x = self.tr_emb(Variable(contexts.seq))  # (n_batch, n_seeds', n_embs)
+        x = self.tr_emb(contexts)  # (n_batch, n_seeds', n_embs)
+        x = x * mask[:, :, None]  # masking
         x = swish(self.proj(x))  # (n_batch, n_seeds', n_hid)
 
         # FC Attention
@@ -184,20 +189,22 @@ if __name__ == "__main__":
                 tid_ = [[x[1]] + x[2] for x in batch]
                 pid_ = [[x[0]] * len(tt) for x, tt in zip(batch, tid_)]
                 pref_ = [[1.] + [-1.] * len(x[2]) for x in batch]
-                context = [x[-1] for x in batch]
+
+                # get the mask
+                context = [list(x[-1]) for x in batch]
+                max_len = max(map(len, context))
+                context = [a + [-1] * (max_len - len(a)) for a in context]
 
                 pid = Variable(torch.LongTensor(pid_).cuda())
                 tid = Variable(torch.LongTensor(tid_).cuda())
                 pref = Variable(torch.FloatTensor(pref_).cuda())
-
-                # wrap sequence
-                C = SeqTensor(map(list, context))
+                context = Variable(torch.LongTensor(context).cuda())
 
                 # flush grad
                 opt.zero_grad()
 
                 # forward pass
-                y_pred = model.forward(None, tid, C)
+                y_pred = model.forward(None, tid, context)
                 # y_pred += mf.forward(pid, tid)
 
                 # calc loss
