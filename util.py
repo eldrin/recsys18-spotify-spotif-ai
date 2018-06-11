@@ -1,3 +1,4 @@
+from itertools import chain
 from scipy import sparse as sp
 import pandas as pd
 import numpy as np
@@ -8,6 +9,11 @@ TORCH_DTYPE_TENSOR = {
     'float': torch.FloatTensor,
     'int': torch.LongTensor
 }
+
+
+def flatten(nested_list):
+    """"""
+    return list(chain.from_iterable(nested_list))
 
 
 def numpy2torchvar(ndarray, dtype='float', gpu=True):

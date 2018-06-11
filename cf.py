@@ -206,13 +206,14 @@ class TSVD:
         self.model = TruncatedSVD(n_components)
 
     def fit(self, X):
-        self.P = self.model.fit_transform(X)
-        self.Q = self.model.components_
+        self.P = self.model.fit_transform(X).astype(np.float32)
+        self.Q = self.model.components_.T.astype(np.float32)
 
     def predict_k(self, u, k=500):
         """"""
         r = self.P[u].dot(self.Q.T)
-        return np.argsort(r)[::-1][:k]
+        # return np.argsort(r)[::-1][:k]
+        return r[np.argpartition(r, k)[:k]].argsort()[::-1]
 
 
 class BPRMF:
@@ -832,8 +833,10 @@ class WRMFAttrSim:
         A = attribute matrix for item (optional)
         """
         X = X.tocsr()
-        S = self.confidence_fn(X)
-        B = self.confidence_fn(B)
+        # S = self.confidence_fn(X)
+        # B = self.confidence_fn(B)
+        S = linear_surplus_confidence_matrix(X, alpha=100)
+        B = log_surplus_confidence_matrix(B, alpha=1, epsilon=100)
 
         UVW = cofactorize2(
             S, A, B, self.n_components_, lambda_a=self.beta_a, lambda_b=self.beta_b,

@@ -132,10 +132,9 @@ class ItemAttentionCF(nn.Module):
         y = self._item_out(tid)
 
         pred = torch.bmm(
-            x.view(x.shape[0], 1, self.n_out),
-            y.view(y.shape[0], self.n_out, 1)
+            y, x.view(x.shape[0], self.n_out, 1)
         ).squeeze()
-        return pred
+        return pred  # (n_bach, n_pos + n_neg)
 
 
 if __name__ == "__main__":
@@ -144,8 +143,8 @@ if __name__ == "__main__":
     HP = CONFIG['hyper_parameters']
 
     # load audio_feature
-    # X = np.load(CONFIG['path']['embeddings']['X'])
-    X = np.load(CONFIG['path']['embeddings']['V'])
+    X = np.load(CONFIG['path']['embeddings']['X'])
+    # X = np.load(CONFIG['path']['embeddings']['V'])
 
     # prepare model instances
     sampler = MPDSampler(CONFIG, verbose=True)
@@ -179,26 +178,30 @@ if __name__ == "__main__":
     try:
         epoch = trange(HP['num_epochs'], ncols=80)
         for n in epoch:
-            for batch, context in sampler.generator():
-                batch_t = np.array(batch).T
-                C = SeqTensor(map(list, context))
+            for batch in sampler.generator():
 
                 # parse in / out
-                pid, tid = batch_t[:2]
-                pid = torch.cuda.LongTensor(pid)
-                tid = torch.cuda.LongTensor(tid)
-                pref, conf = [
-                    torch.cuda.FloatTensor(a) for a in batch_t[-2:]]
+                tid_ = [[x[1]] + x[2] for x in batch]
+                pid_ = [[x[0]] * len(tt) for x, tt in zip(batch, tid_)]
+                pref_ = [[1.] + [-1.] * len(x[2]) for x in batch]
+                context = [x[-1] for x in batch]
+
+                pid = Variable(torch.LongTensor(pid_).cuda())
+                tid = Variable(torch.LongTensor(tid_).cuda())
+                pref = Variable(torch.FloatTensor(pref_).cuda())
+
+                # wrap sequence
+                C = SeqTensor(map(list, context))
 
                 # flush grad
                 opt.zero_grad()
 
                 # forward pass
-                y_pred = model.forward(pid, tid, C)
+                y_pred = model.forward(None, tid, C)
                 # y_pred += mf.forward(pid, tid)
 
                 # calc loss
-                l = f_loss(y_pred, Variable(pref))
+                l = f_loss(y_pred, pref)
 
                 # back-propagation
                 l.backward()
@@ -273,11 +276,13 @@ if __name__ == "__main__":
 
             # predict k
             pred = []
-            for k in trange(0, len(m), b, ncols=80):
-                pred.append(P[u].dot(Q[k:k+b].T))
+            # for k in trange(0, len(m), b, ncols=80):
+            #     pred.append(P[u].dot(Q[k:k+b].T))
+            # pred = np.concatenate(pred, axis=0)
+            pred = P[u].dot(Q.T)
 
-            pred = np.concatenate(pred, axis=0)
-            ind = np.argsort(pred)[::-1][:1000]
+            # ind = np.argsort(pred)[::-1][:1000]
+            ind = pred[np.argpartition(pred, 1000)[:1000]].argsort()[::-1]
 
             # exclude training data
             pred = filter(lambda x: x not in true_t, ind)[:500]

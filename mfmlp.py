@@ -27,7 +27,7 @@ NDCG = partial(ndcg, k=500)
 
 from mfmlp_conf import CONFIG
 from evaluation import evaluate
-from util import numpy2torchvar
+from util import numpy2torchvar, flatten
 
 try:
     print(torch.cuda.current_device())
@@ -135,46 +135,34 @@ class MPDSampler:
         else:
             M = self.triplet.sample(frac=1).values
 
-        batch = []
-        contexts = []
-        # s_pos = 240.7895  # log_surplus(1)
-        s_pos = 1
-        s_neg = 1
-        # negs = set()
+        batch, neg, weight = [], [], []
         for u, i, v in M:
             # positive sample / yield
             pos_i = self.pos_tracks[u]
 
             if v == 0:
                 continue
-            batch.append((u, i, self.track2artist[i], 1, s_pos))
 
-            if self.with_context:
-                context = pos_i - set([i])
-                contexts.append(context)
+            # add context
+            context = pos_i - set([i])  # TODO: random sampling?
 
             # draw negative samples (for-loop)
             for k in xrange(self.neg):
-                # j_ = np.random.choice(self.n_tracks)
                 j_ = self.items[np.random.choice(len(self.items))]
-                # while (j_ in pos_i) or (j_ in negs):
                 while j_ in pos_i:
-                    # j_ = np.random.choice(self.n_tracks)
                     j_ = self.items[np.random.choice(len(self.items))]
-                # negs.update((j_,))
 
                 # negtive sample has 0 interaction (conf==1)
-                batch.append((u, j_, self.track2artist[j_], -1, s_neg))
-                if self.with_context:
-                    contexts.append(context)
+                neg.append(j_)
+
+            # prepare batch containor
+            batch.append((u, i, neg, context))
+            neg, context = [], []
 
             # batch.append(batch_)
-            if len(batch) >= self.batch_size * (1. + self.neg):
-                if self.with_context:
-                    yield batch, contexts
-                    contexts = []
-                else:
-                    yield batch
+            if len(batch) >= self.batch_size:
+                yield batch
+                # reset containors
                 batch = []
 
 
@@ -465,15 +453,13 @@ class RecNet:
         try:
             for n in epoch:
                 for batch in sampler.generator():
-                    batch_t = np.array(batch).T
-                    pid = torch.cuda.LongTensor(batch_t[0])
-                    tid = torch.cuda.LongTensor(batch_t[1])
-                    pref = torch.cuda.FloatTensor(batch_t[3])
-                    conf = torch.cuda.FloatTensor(batch_t[4])
-                    # pid = torch.cuda.LongTensor(map(lambda x: x[0], batch))
-                    # tid = torch.cuda.LongTensor(map(lambda x: x[1], batch))
-                    # pref = torch.cuda.FloatTensor(map(lambda x: x[3], batch))
-                    # conf = torch.cuda.FloatTensor(map(lambda x: x[4], batch))
+                    tid_ = [[x[1]] + x[2] for x in batch]
+                    pid_ = [[x[0]] * len(tt) for x, tt in zip(batch, tid_)]
+                    pref_ = [[1.] + [-1.] * len(x[2]) for x in batch]
+                    pid = torch.LongTensor(flatten(pid_)).cuda()
+                    tid = torch.LongTensor(flatten(tid_)).cuda()
+                    pref = torch.FloatTensor(flatten(pref_)).cuda()
+                    conf = pref
 
                     loss = self.partial_fit(pid, tid, pref, conf)
 
@@ -518,8 +504,8 @@ if __name__ == "__main__":
     K = CONFIG['evaluation']['cutoff']
     bs = CONFIG['hyper_parameters']['batch_size']
     sampler = MPDSampler(CONFIG, verbose=True)
-    # model = RecNet(CONFIG, verbose=True)
-    # model.fit(sampler)
+    model = RecNet(CONFIG, verbose=True)
+    model.fit(sampler)
     # print(evaluate(model, sampler.train, sampler.test))
     # user_ids = range(model.core_model.n_users)
     # U = np.concatenate(

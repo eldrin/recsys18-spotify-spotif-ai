@@ -367,15 +367,14 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     B = pd.read_csv(b_fn, header=None, index_col=None)  # attribute relationship
 
     # 2. load feature data
-    F = pd.read_csv(f_fn, index_col=0)  # audio feature [spotify]
+    F = pd.read_csv(f_fn, index_col='uri')  # audio feature [spotify]
 
     # (filling missing track and the NaN is manually done)
     # (code is just being here for the future report purpose)
-    """
     F = F.reindex(track_hash[0])  # filling missing tracks
     median = F.median()
     F = F.fillna(median)[FEATURE_COLS]
-    """
+
     # get hash
     feature_hash = {v: k for k, v in enumerate(F.index)}
 
@@ -503,15 +502,14 @@ def prepare_full_data(r_fn, t_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     B = pd.read_csv(b_fn, header=None, index_col=None)  # attribute relationship
 
     # 2. load feature data
-    F = pd.read_csv(f_fn, index_col=0)  # audio feature [spotify]
+    F = pd.read_csv(f_fn, index_col='uri')  # audio feature [spotify]
 
     # (filling missing track and the NaN is manually done)
     # (code is just being here for the future report purpose)
-    """
     F = F.reindex(track_hash[0])  # filling missing tracks
     median = F.median()
     F = F.fillna(median)[FEATURE_COLS]
-    """
+
     # get hash
     feature_hash = {v: k for k, v in enumerate(F.index)}
 
@@ -591,5 +589,5 @@ def get_unique_ngrams(words, n=3, stopper='#'):
 
 if __name__ == "__main__":
     # fire.Fire(prepare_data)
-    # fire.Fire(subsample_dataset)
-    fire.Fire(prepare_full_data)
+    fire.Fire(subsample_dataset)
+    # fire.Fire(prepare_full_data)
