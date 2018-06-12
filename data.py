@@ -1,5 +1,6 @@
 import glob
 import os
+from os.path import join
 from itertools import chain
 import json
 
@@ -54,7 +55,7 @@ def prepare_data(data_root, out_fn='playlist_tracks.csv',
                  artist_hash_fn='uniq_artists.csv',
                  playlist_hash_fn='uniq_playlists.csv'):
     """"""
-    fns = glob.glob(os.path.join(data_root, 'data/*.json'))
+    fns = glob.glob(join(data_root, 'data/*.json'))
 
     # get uniq tracks' hash
     (all_trks, trk_hash, trk_uri_nm,
@@ -66,7 +67,7 @@ def prepare_data(data_root, out_fn='playlist_tracks.csv',
 
     # write playlist - track tuple data to text file
     pid_nm = {}
-    with open(os.path.join(data_root, out_fn), 'w') as f:
+    with open(join(data_root, out_fn), 'w') as f:
         for fn in tqdm(fns, ncols=80):
             for pl in json.load(open(fn))['playlists']:
                 # save pid name
@@ -80,21 +81,21 @@ def prepare_data(data_root, out_fn='playlist_tracks.csv',
                         int(art_hash[t['artist_uri']])))
 
     # write hash to file {URI (or PID) : assigned_ix}
-    with open(os.path.join(data_root, track_hash_fn), 'wb') as f:
+    with open(join(data_root, track_hash_fn), 'wb') as f:
         for k, v in trk_hash.iteritems():
             f.write(
                 u'{}\t{}\t{:d}\n'.format(k, trk_uri_nm[k], int(v))
                 .encode('utf-8')
             )
 
-    with open(os.path.join(data_root, artist_hash_fn), 'wb') as f:
+    with open(join(data_root, artist_hash_fn), 'wb') as f:
         for k, v in art_hash.iteritems():
             f.write(
                 u"{}\t{}\t{:d}\n".format(k, art_uri_nm[k], int(v))
                 .encode('utf-8')
             )
 
-    with open(os.path.join(data_root, playlist_hash_fn), 'wb') as f:
+    with open(join(data_root, playlist_hash_fn), 'wb') as f:
         for k, v in pid_nm.iteritems():
             f.write(
                 u"{:d}\t{}\n".format(k, v).encode('utf-8')
@@ -327,7 +328,7 @@ def process_simulated_testset(R, A, B, n_train, n_test, tol=5):
 
 def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
                       track_hash_fn, artist_hash_fn, playlist_title_fn,
-                      n_train=10000, n_test=100, test='external'):
+                      out_path, n_train=10000, n_test=100, test='external'):
     """"""
     print('Loading data!...')
     # 1. load main assignment file
@@ -427,20 +428,20 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
 
     print('Saving!...')
     # save results
-    rtr.to_csv('/mnt/bulk/recsys18/playlist_track_ss_train.csv', header=None, index=None)
-    rts.to_csv('/mnt/bulk/recsys18/playlist_track_ss_test.csv', header=None, index=None)
-    a.to_csv('/mnt/bulk/recsys18/artist_track_ss.csv', header=None, index=None)
-    b.to_csv('/mnt/bulk/recsys18/artist_artist_ss.csv', header=None, index=None)
-    f.to_csv('/mnt/bulk/recsys18/track_audio_feature_ss.csv', index=None)
+    rtr.to_csv(join(out_path, 'playlist_track_ss_train.csv'), header=None, index=None)
+    rts.to_csv(join(out_path, 'playlist_track_ss_test.csv'), header=None, index=None)
+    a.to_csv(join(out_path, 'artist_track_ss.csv'), header=None, index=None)
+    b.to_csv(join(out_path, 'artist_artist_ss.csv'), header=None, index=None)
+    f.to_csv(join(out_path, 'track_audio_feature_ss.csv'), index=None)
 
     # normalize feature and save
     sclr = QuantileTransformer(1000, 'normal')
     f = sclr.fit_transform(f)
-    np.save('/mnt/bulk/recsys18/track_audio_feature_ss.npy', f)
+    np.save(join(out_path, 'track_audio_feature_ss.npy'), f)
 
     # save hashes
     for name, dic in zip(['playlist', 'track', 'artist'], [new_pl_dict, new_tr_dict, new_ar_dict]):
-        with open('/mnt/bulk/recsys18/{}_hash_ss.csv'.format(name), 'w') as f:
+        with open(join(out_path, '{}_hash_ss.csv'.format(name)), 'w') as f:
             for k, v in dic.iteritems():
                 f.write("{:d}\t{}\t{}\t{}\n".format(int(k), v[0], v[1], v[2]))
 

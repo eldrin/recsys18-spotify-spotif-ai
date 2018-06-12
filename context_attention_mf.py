@@ -51,6 +51,62 @@ def mask_softmax(a, dim, epsilon=1e-8):
     return a_softmax
 
 
+def check_emb_shape(P, Q, r):
+    """"""
+    if P is not None and Q is not None:
+        assert P.shape[1] == Q.shape[1]
+
+
+def init_embedding_layer(emb, n, r, is_train):
+    """"""
+    if emb is not None:
+        emb_layer = nn.Embedding(n, emb.shape[-1])
+        emb_layer.weight.data.copy_(torch.FloatTensor(emb))
+
+        if r != emb.shape[-1]:
+            print('[Warning] n_components is not mathcing to input embedding\
+                  overriding it to input embedding shape...')
+            r = emb.shape[-1]
+    else:
+        emb_layer = nn.Embedding(n, r)
+
+    emb_layer.weight.requires_grad = is_train
+
+    return r, emb_layer
+
+
+class MF(nn.Module):
+    """"""
+    def __init__(self, n_components, n_users, n_items, user_emb, item_emb,
+                 user_train=True, item_train=True):
+        """"""
+        super(MF, self).__init__()
+        self.n_components = n_components
+        self.n_users = n_users
+        self.n_items = n_items
+
+        check_emb_shape(user_emb, item_emb)
+
+        # user embedding
+        self.n_components, self.user_emb = init_embedding_layer(
+            user_emb, n_users, n_components, user_train)
+
+        # item embedding
+        self.n_components, self.item_emb = init_embedding_layer(
+            item_emb, n_items, n_components, item_train)
+
+    def forward(self, u, i):
+        """"""
+        p = self.user_emb(u)
+        q = self.item_emb(i)
+
+        pred = torch.bmm(
+            p.view(p.shape[0], 1, self.n_components),
+            q.view(q.shape[0], self.n_components, 1)
+        ).squeeze()
+        return pred  # (n_bach, n_pos + n_neg)
+
+
 class ItemAttentionCF(nn.Module):
     """"""
     def __init__(self, n_components, n_users, n_items,user_emb, item_emb,
@@ -163,11 +219,12 @@ if __name__ == "__main__":
         learn_metric=HP['learn_metric']
     ).cuda()
 
-    # mf = CFMLP(
-    #     n_components=HP['n_out_embedding'], architecture=[],
-    #     n_users=sampler.n_playlists, n_items=sampler.n_tracks,
-    #     user_train=True, item_train=True,
-    #     user_emb=None, item_emb=None, learn_metric=False
+    # mf = MF(
+    #     n_components=HP['n_embedding'],
+    #     n_users=sampler.n_playlists,
+    #     n_items=sampler.n_tracks,
+    #     user_emb=None, item_emb=None,
+    #     user_train=True, item_train=True
     # ).cuda()
 
     params = filter(lambda p: p.requires_grad, model.parameters())
@@ -245,7 +302,7 @@ if __name__ == "__main__":
         #     ], dim=1).data.cpu().numpy()
         # )
         Q.append(model._item_out(tid_).data.cpu().numpy())
-    Q = np.concatenate(Q, axis=0)
+    Q = np.concatenate(Q, axis=0).astype(np.float32)
     print(Q.shape)
     np.save('./data/cnn_V.npy', Q)
 
@@ -258,44 +315,54 @@ if __name__ == "__main__":
             if pl in sampler.pos_tracks:
                 plst.append(list(sampler.pos_tracks[pl]))
             else:
+                # pick popular items
                 plst.append(np.random.choice(10000, 10).tolist())
-        C = SeqTensor(plst)
+
+        max_len = max(map(len, plst))
+        context = [a + [-1] * (max_len - len(a)) for a in plst]
+        C = Variable(torch.LongTensor(context).cuda())
+
         # P.append(
         #     torch.cat([
         #         mf.mlps['user'](Variable(torch.cuda.LongTensor(m[slice(i, i+b)]))),
         #         model._user_out(C)], dim=1).data.cpu().numpy())
         P.append(model._user_out(C).data.cpu().numpy())
-    P = np.concatenate(P, axis=0)
+    P = np.concatenate(P, axis=0).astype(np.float32)
     print(P.shape)
     # np.save('./data/cnn_U.npy', Q)
 
     if sampler.test is not None:
         print('Evaluate!')
         # fetch testing playlists
-        trg_u = sampler.test['playlist'].unique()
+        y, yt = sampler.train, sampler.test
+        trg_u = yt['playlist'].unique()
+        yt_tracks = yt.groupby('playlist')['track'].apply(list)
+        y_tracks = y[y['value']==1].groupby('playlist')['track'].apply(set)
 
         #   2) calculate scores using the same way of MLP case
         rprec = []
         ndcg = []
         for j, u in tqdm(enumerate(trg_u), total=len(trg_u), ncols=80):
-            true = sampler.test[sampler.test['playlist'] == u]['track']
-            true_t = set(sampler.train[sampler.train['playlist'] == u]['track'])
+            true_ts = yt_tracks.loc[u]
+            if u in y_tracks.index:
+                true_tr = y_tracks.loc[u]
+            else:
+                true_tr = set()
 
             # predict k
             pred = []
             # for k in trange(0, len(m), b, ncols=80):
             #     pred.append(P[u].dot(Q[k:k+b].T))
             # pred = np.concatenate(pred, axis=0)
-            pred = P[u].dot(Q.T)
-
-            # ind = np.argsort(pred)[::-1][:1000]
-            ind = pred[np.argpartition(pred, 1000)[:1000]].argsort()[::-1]
+            pred = -P[u].dot(Q.T)
+            ind = np.argpartition(pred, 650)[:650]
+            ind = ind[pred[ind].argsort()]
 
             # exclude training data
-            pred = filter(lambda x: x not in true_t, ind)[:500]
+            pred = filter(lambda x: x not in true_tr, ind)[:500]
 
-            rprec.append(r_precision(true, pred))
-            ndcg.append(NDCG(true, pred))
+            rprec.append(r_precision(true_ts, pred))
+            ndcg.append(NDCG(true_ts, pred))
         rprec = filter(lambda r: r is not None, rprec)
         ndcg = filter(lambda r: r is not None, ndcg)
 
