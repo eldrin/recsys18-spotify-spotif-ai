@@ -57,10 +57,10 @@ def check_emb_shape(P, Q, r):
         assert P.shape[1] == Q.shape[1]
 
 
-def init_embedding_layer(emb, n, r, is_train):
+def init_embedding_layer(emb, n, r, is_train, sparse=True):
     """"""
     if emb is not None:
-        emb_layer = nn.Embedding(n, emb.shape[-1])
+        emb_layer = nn.Embedding(n, emb.shape[-1], sparse=sparse)
         emb_layer.weight.data.copy_(torch.FloatTensor(emb))
 
         if r != emb.shape[-1]:
@@ -68,7 +68,8 @@ def init_embedding_layer(emb, n, r, is_train):
                   overriding it to input embedding shape...')
             r = emb.shape[-1]
     else:
-        emb_layer = nn.Embedding(n, r)
+        emb_layer = nn.Embedding(n, r, sparse=sparse)
+        emb_layer.weight.data.copy_(torch.randn(n, r) * 0.01)
 
     emb_layer.weight.requires_grad = is_train
 
@@ -78,33 +79,38 @@ def init_embedding_layer(emb, n, r, is_train):
 class MF(nn.Module):
     """"""
     def __init__(self, n_components, n_users, n_items, user_emb, item_emb,
-                 user_train=True, item_train=True):
+                 user_train=True, item_train=True, sparse_embedding=True):
         """"""
         super(MF, self).__init__()
         self.n_components = n_components
         self.n_users = n_users
         self.n_items = n_items
 
-        check_emb_shape(user_emb, item_emb)
+        check_emb_shape(user_emb, item_emb, n_components)
 
         # user embedding
         self.n_components, self.user_emb = init_embedding_layer(
-            user_emb, n_users, n_components, user_train)
+            user_emb, n_users, n_components, user_train, sparse_embedding)
 
         # item embedding
         self.n_components, self.item_emb = init_embedding_layer(
-            item_emb, n_items, n_components, item_train)
+            item_emb, n_items, n_components, item_train, sparse_embedding)
 
     def forward(self, u, i):
         """"""
         p = self.user_emb(u)
         q = self.item_emb(i)
 
-        pred = torch.bmm(
-            p.view(p.shape[0], 1, self.n_components),
-            q.view(q.shape[0], self.n_components, 1)
-        ).squeeze()
-        return pred  # (n_bach, n_pos + n_neg)
+        if p.ndimension() == 2:
+            p = p.view(p.shape[0], 1, self.n_components)
+
+        if q.ndimension() == 2:
+            q = q.view(q.shape[0], self.n_components, 1)
+        elif q.ndimension() == 3:
+            q = q.permute(0, 2, 1)  # (n_batch, n_hid, n_neg)
+
+        pred = torch.bmm(p, q).squeeze()
+        return pred
 
 
 class ItemAttentionCF(nn.Module):
@@ -123,23 +129,28 @@ class ItemAttentionCF(nn.Module):
 
         # track embedding
         if item_emb is not None:
-            self.tr_emb = nn.Embedding(n_items, item_emb.shape[-1])
+            self.tr_emb = nn.Embedding(n_items, item_emb.shape[-1], sparse=True)
             self.tr_emb.weight.data.copy_(torch.FloatTensor(item_emb))
         else:
-            self.tr_emb = nn.Embedding(n_items, self.n_out)
+            self.tr_emb = nn.Embedding(n_items, self.n_out, sparse=True)
+            self.tr_emb.weight.data.copy_(
+                torch.randn(n_items, self.n_out) * 0.01)
         self.tr_emb.weight.requires_grad = item_train
 
         # track (out) embedding
         self.out_emb = nn.Embedding(n_items, self.n_out)
         self.out_emb.weight.requires_grad = True
+        self.out_emb.weight.data.copy_(
+            torch.randn(n_items, self.n_out) * 0.01)
 
         # playlist embedding
         self.proj = nn.Linear(self.tr_emb.embedding_dim, n_hid)
         self.att_w = nn.Linear(n_hid, n_hid)
         self.att_h = nn.Linear(n_hid, 1)
+        self.att_bn = nn.BatchNorm1d(n_hid)
 
         self.pl_emb1 = nn.Linear(n_hid, self.n_out)
-        self.pl_emb2 = nn.Linear(n_hid, self.n_out)
+        # self.pl_emb2 = nn.Linear(n_hid, self.n_out)
 
     def _item_attention(self, contexts):
         """"""
@@ -150,10 +161,10 @@ class ItemAttentionCF(nn.Module):
         # get context embedding
         x = self.tr_emb(contexts)  # (n_batch, n_seeds', n_embs)
         x = x * mask[:, :, None]  # masking
-        x = swish(self.proj(x))  # (n_batch, n_seeds', n_hid)
+        x = F.relu(self.proj(x))  # (n_batch, n_seeds', n_hid)
 
         # FC Attention
-        z = swish(self.att_w(x))  # (n_batch, n_seeds', n_hid)
+        z = F.relu(self.att_w(x))  # (n_batch, n_seeds', n_hid)
         a = mask_softmax(self.att_h(z).squeeze(), dim=1)
 
         return x, a
@@ -165,14 +176,17 @@ class ItemAttentionCF(nn.Module):
 
         # get 1nd order momentum (mean)
         x1 = torch.bmm(a[:, None, :], x).squeeze()
+        x1 = att_bn(x1)
 
-        # get 2nd order factor with attentional sum
-        sum_x_sqr = x1**2
-        sum_sqr_x = torch.bmm(a[:, None, :]**2, x**2).squeeze()
-        x2 = 0.5 * (sum_x_sqr - sum_sqr_x)  # covariance
+        # # get 2nd order factor with attentional sum
+        # sum_x_sqr = x1**2
+        # sum_sqr_x = torch.bmm(a[:, None, :]**2, x**2).squeeze()
+        # x2 = 0.5 * (sum_x_sqr - sum_sqr_x)  # covariance
 
-        # OUT FC (playlist embedding)
-        x = self.pl_emb1(x1) + self.pl_emb2(x2)  # (n_batch, dim_emb)
+        # # OUT FC (playlist embedding)
+        # x = self.pl_emb1(x1) + self.pl_emb2(x2)  # (n_batch, dim_emb)
+
+        x = self.pl_emb1(x1)
 
         return x
 
@@ -204,7 +218,7 @@ if __name__ == "__main__":
     HP = CONFIG['hyper_parameters']
 
     # load audio_feature
-    X = np.load(CONFIG['path']['embeddings']['X'])
+    # X = np.load(CONFIG['path']['embeddings']['X'])
     # X = np.load(CONFIG['path']['embeddings']['V'])
 
     # prepare model instances
@@ -215,7 +229,7 @@ if __name__ == "__main__":
         n_out=HP['n_out_embedding'],
         non_lin=HP['non_lin'],
         n_users=sampler.n_playlists, n_items=sampler.n_tracks,
-        user_emb=None, item_emb=X, user_train=True, item_train=False,
+        user_emb=None, item_emb=None, user_train=True, item_train=True,
         learn_metric=HP['learn_metric']
     ).cuda()
 
@@ -232,7 +246,8 @@ if __name__ == "__main__":
 
     # set loss / optimizer
     f_loss = NEGCrossEntropyLoss().cuda()
-    opt = HP['optimizer'](params, weight_decay=HP['l2'], lr=HP['learn_rate'])
+    # opt = HP['optimizer'](params, weight_decay=HP['l2'], lr=HP['learn_rate'])
+    opt = HP['optimizer'](params, lr=HP['learn_rate'])
 
     # main training loop
     model.train()
@@ -246,6 +261,7 @@ if __name__ == "__main__":
                 tid_ = [[x[1]] + x[2] for x in batch]
                 pid_ = [[x[0]] * len(tt) for x, tt in zip(batch, tid_)]
                 pref_ = [[1.] + [-1.] * len(x[2]) for x in batch]
+                conf_ = [x[-1] for x in batch]
 
                 # get the mask
                 context = [list(x[-1]) for x in batch]
@@ -255,6 +271,7 @@ if __name__ == "__main__":
                 pid = Variable(torch.LongTensor(pid_).cuda())
                 tid = Variable(torch.LongTensor(tid_).cuda())
                 pref = Variable(torch.FloatTensor(pref_).cuda())
+                conf = Variable(torch.FloatTensor(conf_).cuda())
                 context = Variable(torch.LongTensor(context).cuda())
 
                 # flush grad
@@ -265,7 +282,7 @@ if __name__ == "__main__":
                 # y_pred += mf.forward(pid, tid)
 
                 # calc loss
-                l = f_loss(y_pred, pref)
+                l = f_loss(y_pred, pref, conf)
 
                 # back-propagation
                 l.backward()
