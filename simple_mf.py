@@ -79,8 +79,8 @@ if __name__ == "__main__":
                 y_pred = mf.forward(pid, tid)
 
                 # calc loss
-                # l = f_loss(y_pred, pref, conf)
-                l = f_loss(y_pred, pref)
+                l = f_loss(y_pred, pref, conf)
+                # l = f_loss(y_pred, pref)
 
                 # back-propagation
                 l.backward()

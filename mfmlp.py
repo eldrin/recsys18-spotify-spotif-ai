@@ -50,7 +50,7 @@ def _load_data(config):
     dat = {
         k: pd.read_csv(fn, header=None) for k, fn
         in config['path']['data'].iteritems()
-        if k != 'playlists' and k != 'tracks'
+        if k not in {'playlists', 'tracks', 'artists'}
     }
     # dat['main'].columns = ['playlist', 'track']
     dat['train'].columns = ['playlist', 'track', 'value']  # set columns name
@@ -91,6 +91,8 @@ class MPDSampler:
         self.with_context = config['hyper_parameters']['with_context']
         self.context_size = [1, 5, 25, 50, 100]
         self.context_shuffle = [False, True]
+        self.w0 = 10  # positive weight
+        self.c0 = 5  # negative initial weight
 
         self.triplet = self.triplet[self.triplet['value'] == 1]
 
@@ -121,17 +123,17 @@ class MPDSampler:
             # self.items = dict(enumerate(self.items))
 
             f_w_a = f_w**.5
-            c = f_w_a / f_w_a.sum()
+            c = f_w_a / f_w_a.sum() * self.c0
             self.items = range(self.n_tracks)
             self.items = dict(enumerate(self.items))
             self.weight = dict(zip(self.items, c))
-            self.pos_weight = 1
+            self.pos_weight = self.w0
 
         else:
             self.items = range(self.n_tracks)
             self.items = dict(enumerate(self.items))
             self.weight = dict(zip(self.items, [1] * len(self.items)))
-            self.pos_weight = 1
+            self.pos_weight = self.w0
 
         self.neg = config['hyper_parameters']['neg_sample']
         self.verbose = verbose

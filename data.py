@@ -2,6 +2,7 @@ import glob
 import os
 from os.path import join
 from itertools import chain
+from functools import partial
 import json
 
 import pandas as pd
@@ -583,7 +584,7 @@ def get_ngram(word, n=3):
 
 def get_unique_ngrams(words, n=3, stopper='#'):
     """"""
-    ngrams = map(get_ngram, words)
+    ngrams = map(partial(get_ngram, n=n), words)
     uniq_ngrams = list(set(chain.from_iterable(ngrams)))  # flatten
     return uniq_ngrams
 
