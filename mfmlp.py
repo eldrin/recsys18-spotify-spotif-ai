@@ -50,7 +50,7 @@ def _load_data(config):
     dat = {
         k: pd.read_csv(fn, header=None) for k, fn
         in config['path']['data'].iteritems()
-        if k != 'playlists' and k != 'tracks'
+        if k not in {'playlists', 'tracks', 'artists'}
     }
     # dat['main'].columns = ['playlist', 'track']
     dat['train'].columns = ['playlist', 'track', 'value']  # set columns name
@@ -91,6 +91,8 @@ class MPDSampler:
         self.with_context = config['hyper_parameters']['with_context']
         self.context_size = [1, 5, 25, 50, 100]
         self.context_shuffle = [False, True]
+        self.w0 = 10  # positive weight
+        self.c0 = 5  # negative initial weight
 
         self.triplet = self.triplet[self.triplet['value'] == 1]
 
@@ -108,26 +110,35 @@ class MPDSampler:
                 sorted(track_count.to_dict().items(), key=lambda x: x[0])
             ))
 
-            # Sub-sampling
-            p_drop = dict(zip(range(len(f_w)), 1. - np.sqrt(self.threshold / f_w)))
-            train_words = filter(lambda r: np.random.random() < (1 - r[1]), p_drop.items())
-            train_words = map(lambda r: r[0], train_words)
+            # # Sub-sampling
+            # p_drop = dict(zip(range(len(f_w)), 1. - np.sqrt(self.threshold / f_w)))
+            # train_words = filter(lambda r: np.random.random() < (1 - r[1]), p_drop.items())
+            # train_words = map(lambda r: r[0], train_words)
 
-            # preprocess weighted sampling pool
-            f_w_pow = np.round(np.power(f_w, self.weight_pow))[train_words]
-            self.items = list(
-                chain.from_iterable([[k] * int(v) for k, v in zip(train_words, f_w_pow)])
-            )
+            # # preprocess weighted sampling pool
+            # f_w_pow = np.round(np.power(f_w, self.weight_pow))[train_words]
+            # self.items = list(
+            #     chain.from_iterable([[k] * int(v) for k, v in zip(train_words, f_w_pow)])
+            # )
+            # self.items = dict(enumerate(self.items))
+
+            f_w_a = f_w**.5
+            c = f_w_a / f_w_a.sum() * self.c0
+            self.items = range(self.n_tracks)
             self.items = dict(enumerate(self.items))
+            self.weight = dict(zip(self.items, c))
+            self.pos_weight = self.w0
 
         else:
             self.items = range(self.n_tracks)
             self.items = dict(enumerate(self.items))
+            self.weight = dict(zip(self.items, [1] * len(self.items)))
+            self.pos_weight = self.w0
 
         self.neg = config['hyper_parameters']['neg_sample']
         self.verbose = verbose
 
-    # @background(max_prefetch=10000)
+    # @background(max_prefetch=100)
     def generator(self):
         """"""
         if self.verbose:
@@ -135,29 +146,37 @@ class MPDSampler:
         else:
             M = self.triplet.sample(frac=1).values
 
-        batch, neg, weight = [], [], []
+        batch, neg, conf = [], [], []
         for u, i, v in M:
-            # positive sample / yield
-            pos_i = self.pos_tracks[u]
 
             if v == 0:
                 continue
 
+            # positive sample / yield
+            pos_i = self.pos_tracks[u]
+            conf.append(self.pos_weight)
+
             # add context
-            context = pos_i - set([i])  # TODO: random sampling?
+            context = pos_i - set([i])
+            if len(context) > 0:
+                N = filter(lambda x: x <= len(context), self.context_size)
+                context = np.random.choice(
+                    list(context), np.random.choice(N), replace=False)
+            else:  # randomly pick popular songs...
+                context = np.random.choice(100000, 5, False)
 
             # draw negative samples (for-loop)
             for k in xrange(self.neg):
                 j_ = self.items[np.random.choice(len(self.items))]
                 while j_ in pos_i:
                     j_ = self.items[np.random.choice(len(self.items))]
-
                 # negtive sample has 0 interaction (conf==1)
                 neg.append(j_)
+                conf.append(self.weight[j_])
 
             # prepare batch containor
-            batch.append((u, i, neg, context))
-            neg, context = [], []
+            batch.append((u, i, neg, context, conf))
+            neg, context, conf = [], [], []
 
             # batch.append(batch_)
             if len(batch) >= self.batch_size:
@@ -335,7 +354,6 @@ class NEGCrossEntropyLoss(nn.Module):
 
     def forward(self, hv, targ, weight=None):
         """"""
-        # targ[targ==0] = -1
         if weight is not None:
             return -(F.logsigmoid(hv * targ) * weight).mean()
         else:
