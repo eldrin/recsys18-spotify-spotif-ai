@@ -2,7 +2,7 @@ import os
 import numpy as np
 
 from util import read_data
-from cf import WRMFAttrSim, WRMF, TSVD
+from cf import WRMFAttrSim, WRMF, ImplicitALS, TSVD
 from evaluation import evaluate
 
 import fire
@@ -31,8 +31,8 @@ def main(train_fn, test_fn=None, r=10, attr_fn=None, attr_sim_fn=None,
                             verbose=True)
         model.fit(d, a, b)
     else:
-        # model = WRMF(r, beta=beta, gamma=gamma, epsilon=epsilon, n_epoch=n_epoch,
-        #              verbose=True)
+        # model = WRMF(r, beta=beta, gamma=gamma, epsilon=epsilon, n_epoch=n_epoch, verbose=True)
+        # model = ImplicitALS(r)
         model = TSVD(r)
         model.fit(d)
 

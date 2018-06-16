@@ -13,7 +13,9 @@ from util import sparse2triplet
 # from evaluation import r_precision, NDCG
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.neighbors import NearestNeighbors
-from sklearn.decomposition import TruncatedSVD
+from sklearn.decomposition import TruncatedSVD, LatentDirichletAllocation
+
+import implicit
 
 from tqdm import trange, tqdm
 import fire
@@ -203,17 +205,41 @@ class KNN:
 
 class TSVD:
     def __init__(self, n_components):
-        self.model = TruncatedSVD(n_components)
+        # self.model = TruncatedSVD(n_components)
+        self.model = LatentDirichletAllocation(
+            n_components)
 
     def fit(self, X):
-        self.P = self.model.fit_transform(X).astype(np.float32)
-        self.Q = self.model.components_.T.astype(np.float32)
+        self.U = self.model.fit_transform(X).astype(np.float32)
+        self.V = self.model.components_.T.astype(np.float32)
 
     def predict_k(self, u, k=500):
         """"""
-        r = self.P[u].dot(self.Q.T)
-        # return np.argsort(r)[::-1][:k]
-        return r[np.argpartition(r, k)[:k]].argsort()[::-1]
+        r = -self.U[u].dot(self.V.T)
+        ix = np.argpartition(r, k)[:k]
+        return ix[r[ix].argsort()]
+
+
+class ImplicitALS:
+    def __init__(self, n_components, regularization=1e-3):
+        self.model = implicit.als.AlternatingLeastSquares(
+            factors=n_components, regularization=regularization,
+            use_gpu=False, iterations=15, dtype=np.float64
+        )
+        # self.model = implicit.bpr.BayesianPersonalizedRanking(
+        #     factors=n_components, regularization=regularization)
+
+    def fit(self, X):
+        X.data = X.data * 200
+        self.model.fit(X.T)
+        self.U = self.model.user_factors
+        self.V = self.model.item_factors
+
+    def predict_k(self, u, k=500):
+        """"""
+        r = -self.U[u].dot(self.V.T)
+        ix = np.argpartition(r, k)[:k]
+        return ix[r[ix].argsort()]
 
 
 class BPRMF:
