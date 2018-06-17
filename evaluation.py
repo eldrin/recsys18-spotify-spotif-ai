@@ -4,7 +4,9 @@ from functools import partial
 import numpy as np
 import pandas as pd
 
+from cf import ImplicitALS
 from tqdm import tqdm
+import fire
 
 import sys
 sys.path.append(os.path.join(os.getcwd(), 'RecsysChallengeTools'))
@@ -53,4 +55,43 @@ def evaluate(model, y, yt, cutoff=CUTOFF):
 
     # calc measures
     res = _evaluate_all(trues, preds)
-    return res
+    return res, (trues, preds)
+
+
+def evaluate_mf(
+    user_factor_fn, item_factor_fn, train_fn, test_fn, cutoff=CUTOFF,
+    mode='all'):
+    """
+    Args:
+
+        user_factor_fn (str) : path to user factor
+        item_factor_fn (str) : path to item factor
+        train_fn (str) : path to train data
+        test_fn (str) : path to test data
+        cutoff (int) : cutoff for calcultate top-k metrics (default : 500)
+        mode (str) : evaluation mode {'all', 'no_seed'}
+            'all': evaluate the mf model for all test case
+            'no_seed': evaluate the mf model only for the **no-seed** test cases
+    """
+    print('Load data...')
+    y = pd.read_csv(train_fn, header=None, names=['playlist', 'track', 'value'])
+    yt = pd.read_csv(test_fn, header=None, names=['playlist', 'track', 'value'])
+
+    if mode=='no_seed':
+        yt = yt[yt['playlist'].isin(set(y[y['value']==0]['playlist'].unique()))]
+
+    print('Load factors and initiate model...')
+    P = np.load(user_factor_fn)
+    Q = np.load(item_factor_fn)
+
+    model = ImplicitALS(Q.shape[-1])
+    model.U = P
+    model.V = Q
+
+    print('Evaluate...')
+    res, (trues, preds) = evaluate(model, y, yt, cutoff=CUTOFF)
+    print res
+
+
+if __name__ == "__main__":
+    fire.Fire(evaluate_mf)

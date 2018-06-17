@@ -815,8 +815,8 @@ class WRMF:
         self.U_, self.V_ = UV
 
         # TODO: prepare mechanism for empty user / items
-        self.U = self.U_
-        self.V = self.V_
+        self.U = self.U_.astype(np.float32)
+        self.V = self.V_.astype(np.float32)
         self.b_u = None
         self.b_i = None
 
@@ -869,13 +869,12 @@ class WRMFAttrSim:
             lambda_reg=self.beta, num_iterations=self.n_epoch,
             init_std=self.init_factor, verbose=self.verbose, dtype=self.dtype)
         self.U_, self.V_, self.W_ = UVW
-        self.U = self.U_
-        self.V = self.V_
-        self.W = self.W_
+        self.U = self.U_.astype(np.float32)
+        self.V = self.V_.astype(np.float32)
+        self.W = self.W_.astype(np.float32)
 
         self.b_u = None
         self.b_i = None
-
 
 
 class FactorizationMachine:

@@ -292,22 +292,31 @@ def process_simulated_testset(R, A, B, n_train, n_test, tol=5):
     print('Before processing difference goes...')
     print(': {:d}'.format(len(diff)))
 
-    # find triplets and merge
-    additional_rtr = R[(R[0].isin(set(R[R[1].isin(diff)][0]))) & (R[0].isin(sampled_pl_tr))]
-    # additional_rtr = R[R[0].isin(set(R[R[1].isin(diff)][0]))]
-    Rtr = pd.concat([Rtr, additional_rtr], axis=0).drop_duplicates()
+    # cut out tracks not introduced in train
+    Rts = Rts[~Rts[1].isin(diff)]
 
-    # Do it again!
-    # find playlist contain the difference between train - test tracks
     uniq_tracks_test = set(Rts[1].unique())
     uniq_tracks_train = set(Rtr[1].unique())
     diff = uniq_tracks_test - uniq_tracks_train
     print('After processing difference goes...')
     print(': {:d}'.format(len(diff)))
 
-    dup_ix = pd.concat([Rtr, Rts], axis=0).duplicated(keep='last').iloc[:-len(Rts)]
-    Rtr.loc[dup_ix, 2] = 0
-    # Rtr = pd.concat([Rtr, Rts], axis=0).drop_duplicates(keep='last')
+    # # find triplets and merge
+    # additional_rtr = R[(R[0].isin(set(R[R[1].isin(diff)][0]))) & (R[0].isin(sampled_pl_tr))]
+    # # additional_rtr = R[R[0].isin(set(R[R[1].isin(diff)][0]))]
+    # Rtr = pd.concat([Rtr, additional_rtr], axis=0).drop_duplicates()
+
+    # # Do it again!
+    # # find playlist contain the difference between train - test tracks
+    # uniq_tracks_test = set(Rts[1].unique())
+    # uniq_tracks_train = set(Rtr[1].unique())
+    # diff = uniq_tracks_test - uniq_tracks_train
+    # print('After processing difference goes...')
+    # print(': {:d}'.format(len(diff)))
+
+    # dup_ix = pd.concat([Rtr, Rts], axis=0).duplicated(keep='last').iloc[:-len(Rts)]
+    # Rtr.loc[dup_ix, 2] = 0
+    # # Rtr = pd.concat([Rtr, Rts], axis=0).drop_duplicates(keep='last')
 
     # legacies.. (just for reference)
     print('Sampling artist...')
@@ -421,9 +430,20 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     new_tr_dict = {k: (track_id2ttl[k], track_id2uri[k], v) for k, v in new_tr_hash.items()}
     new_ar_dict = {k: (artist_id2ttl[k], artist_id2uri[k], v) for k, v in new_ar_hash.items()}
 
+    # finally, make a playlist-artist matrix using playlist-track / artist-track mat
+    track2artist = dict(a[[1, 0]].values)
+    ctr = rtr.copy()
+    cts = rts.copy()
+    ctr.loc[:, 1] = ctr[1].map(track2artist)
+    cts.loc[:, 1] = cts[1].map(track2artist)
+    ctr = ctr.groupby([0, 1]).sum().reset_index()
+    cts = cts.groupby([0, 1]).sum().reset_index()
+
     # print spec
     print('Rtr: ({:d}, {:d}) / sz:{:d}'.format(rtr[0].nunique(), rtr[1].nunique(), rtr.shape[0]))
     print('Rts: ({:d}, {:d}) / sz:{:d}'.format(rts[0].nunique(), rts[1].nunique(), rts.shape[0]))
+    print('Ctr: ({:d}, {:d}) / sz:{:d}'.format(ctr[0].nunique(), ctr[1].nunique(), ctr.shape[0]))
+    print('Cts: ({:d}, {:d}) / sz:{:d}'.format(cts[0].nunique(), cts[1].nunique(), cts.shape[0]))
     print('A: ({:d}, {:d}) / sz:{:d}'.format(a[0].nunique(), a[1].nunique(), a.shape[0]))
     print('B: ({:d}, {:d}) / sz:{:d}'.format(b[0].nunique(), b[1].nunique(), b.shape[0]))
 
@@ -431,6 +451,8 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     # save results
     rtr.to_csv(join(out_path, 'playlist_track_ss_train.csv'), header=None, index=None)
     rts.to_csv(join(out_path, 'playlist_track_ss_test.csv'), header=None, index=None)
+    ctr.to_csv(join(out_path, 'playlist_artist_ss_train.csv'), header=None, index=None)
+    cts.to_csv(join(out_path, 'playlist_artist_ss_test.csv'), header=None, index=None)
     a.to_csv(join(out_path, 'artist_track_ss.csv'), header=None, index=None)
     b.to_csv(join(out_path, 'artist_artist_ss.csv'), header=None, index=None)
     f.to_csv(join(out_path, 'track_audio_feature_ss.csv'), index=None)
@@ -552,14 +574,22 @@ def prepare_full_data(r_fn, t_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     new_tr_dict = {k: (track_id2ttl[k], track_id2uri[k], v) for k, v in new_tr_hash.items()}
     new_ar_dict = {k: (artist_id2ttl[k], artist_id2uri[k], v) for k, v in new_ar_hash.items()}
 
+    # finally, make a playlist-artist matrix using playlist-track / artist-track mat
+    track2artist = dict(a[[1, 0]].values)
+    ctr = rtr.copy()
+    ctr.loc[:, 1] = ctr[1].map(track2artist)
+    ctr = ctr.groupby([0, 1]).sum().reset_index()
+
     # print spec
     print('Rtr: ({:d}, {:d}) / sz:{:d}'.format(rtr[0].nunique(), rtr[1].nunique(), rtr.shape[0]))
+    print('Ctr: ({:d}, {:d}) / sz:{:d}'.format(ctr[0].nunique(), ctr[1].nunique(), ctr.shape[0]))
     print('A: ({:d}, {:d}) / sz:{:d}'.format(a[0].nunique(), a[1].nunique(), a.shape[0]))
     print('B: ({:d}, {:d}) / sz:{:d}'.format(b[0].nunique(), b[1].nunique(), b.shape[0]))
 
     print('Saving!...')
     # save results
     rtr.to_csv('/mnt/bulk/recsys18/playlist_track_train.csv', header=None, index=None)
+    ctr.to_csv('/mnt/bulk/recsys18/playlist_artist_train.csv', header=None, index=None)
     a.to_csv('/mnt/bulk/recsys18/artist_track.csv', header=None, index=None)
     b.to_csv('/mnt/bulk/recsys18/artist_artist.csv', header=None, index=None)
     f.to_csv('/mnt/bulk/recsys18/track_audio_feature.csv', index=None)

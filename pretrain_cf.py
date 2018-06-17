@@ -32,8 +32,8 @@ def main(train_fn, test_fn=None, r=10, attr_fn=None, attr_sim_fn=None,
         model.fit(d, a, b)
     else:
         # model = WRMF(r, beta=beta, gamma=gamma, epsilon=epsilon, n_epoch=n_epoch, verbose=True)
-        # model = ImplicitALS(r)
-        model = TSVD(r)
+        model = ImplicitALS(r)
+        # model = TSVD(r)
         model.fit(d)
 
     if test_fn is not None:
@@ -43,7 +43,8 @@ def main(train_fn, test_fn=None, r=10, attr_fn=None, attr_sim_fn=None,
 
     print('Save Model...')
     if model_out_root is None:
-            model_out_root = os.path.join(os.getcwd(), 'data')
+        model_out_root = os.path.join(os.getcwd(), 'data')
+
     np.save(os.path.join(model_out_root, 'wrmf_U.npy'), model.U)
     np.save(os.path.join(model_out_root, 'wrmf_V.npy'), model.V)
     if hasattr(model, 'W'):

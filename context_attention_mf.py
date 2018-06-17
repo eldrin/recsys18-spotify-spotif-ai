@@ -367,10 +367,6 @@ if __name__ == "__main__":
                 true_tr = set()
 
             # predict k
-            pred = []
-            # for k in trange(0, len(m), b, ncols=80):
-            #     pred.append(P[u].dot(Q[k:k+b].T))
-            # pred = np.concatenate(pred, axis=0)
             pred = -P[u].dot(Q.T)
             ind = np.argpartition(pred, 650)[:650]
             ind = ind[pred[ind].argsort()]
