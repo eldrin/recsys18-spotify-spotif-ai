@@ -82,7 +82,7 @@ class MPDSampler:
         self.triplet = self.train
 
         self.n_playlists = self.train['playlist'].nunique()
-        self.n_tracks = self.train['track'].nunique()
+        self.n_tracks = self.triplet['track'].nunique()
         self.num_interactions = self.train.shape[0]
         self.batch_size = config['hyper_parameters']['batch_size']
         self.is_weight = config['hyper_parameters']['sample_weight']
@@ -105,10 +105,11 @@ class MPDSampler:
         if self.is_weight:
             # check word (track) frequency
             track_count = self.triplet.groupby('track').count()['playlist']
-            f_w = np.array(map(
-                lambda x: x[1],
-                sorted(track_count.to_dict().items(), key=lambda x: x[0])
-            ))
+            # f_w = np.array(map(
+            #     lambda x: x[1],
+            #     sorted(track_count.to_dict().items(), key=lambda x: x[0])
+            # ))
+            f_w = track_count.to_dict().items()
 
             # # Sub-sampling
             # p_drop = dict(zip(range(len(f_w)), 1. - np.sqrt(self.threshold / f_w)))
@@ -122,16 +123,16 @@ class MPDSampler:
             # )
             # self.items = dict(enumerate(self.items))
 
-            f_w_a = f_w**.5
+            f_w_a = np.array(map(lambda x: x[1], f_w))**.5
             c = f_w_a / f_w_a.sum() * self.c0
-            self.items = range(self.n_tracks)
-            self.items = dict(enumerate(self.items))
+            self.items = map(lambda x: x[0], f_w)
+            self.items_dict = dict(enumerate(self.items))
             self.weight = dict(zip(self.items, c))
             self.pos_weight = self.w0
 
         else:
-            self.items = range(self.n_tracks)
-            self.items = dict(enumerate(self.items))
+            self.items = self.triplet['track'].unique()
+            self.items_dict = dict(enumerate(self.items))
             self.weight = dict(zip(self.items, [1] * len(self.items)))
             self.pos_weight = self.w0
 
@@ -167,9 +168,9 @@ class MPDSampler:
 
             # draw negative samples (for-loop)
             for k in xrange(self.neg):
-                j_ = self.items[np.random.choice(len(self.items))]
+                j_ = self.items_dict[np.random.choice(self.n_tracks)]
                 while j_ in pos_i:
-                    j_ = self.items[np.random.choice(len(self.items))]
+                    j_ = self.items_dict[np.random.choice(self.n_tracks)]
                 # negtive sample has 0 interaction (conf==1)
                 neg.append(j_)
                 conf.append(self.weight[j_])
