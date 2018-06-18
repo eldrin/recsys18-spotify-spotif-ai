@@ -10,7 +10,7 @@ import fire
 
 def main(train_fn, test_fn=None, r=10, attr_fn=None, attr_sim_fn=None,
          gamma=1, epsilon=1, n_epoch=30, cutoff=500,
-         beta=1, beta_a=1, beta_b=1, model_out_root=None):
+         beta=1, beta_a=1, beta_b=1, model_out_root=None, model_name='wrmf'):
     """"""
     print('Loading data...')
     d, y = read_data(train_fn)
@@ -31,25 +31,39 @@ def main(train_fn, test_fn=None, r=10, attr_fn=None, attr_sim_fn=None,
                             verbose=True)
         model.fit(d, a, b)
     else:
-        # model = WRMF(r, beta=beta, gamma=gamma, epsilon=epsilon, n_epoch=n_epoch, verbose=True)
-        model = ImplicitALS(r)
-        # model = TSVD(r)
+        if 'wrmf' in model_name:
+            model = WRMF(r, beta=beta, gamma=gamma, epsilon=epsilon,
+                         n_epoch=n_epoch, verbose=True)
+        elif 'implicitals' in model_name:
+            model = ImplicitALS(r)
+        else:
+            raise ValueError(
+                '[Error] {} is not supported model!'.format(model_name)
+            )
         model.fit(d)
 
     if test_fn is not None:
         print('Evaluate!')
-        res = evaluate(model, y, yt, cutoff)
+        res, (trues, preds) = evaluate(model, y, yt, cutoff)
         print(res)
 
     print('Save Model...')
     if model_out_root is None:
         model_out_root = os.path.join(os.getcwd(), 'data')
 
-    np.save(os.path.join(model_out_root, 'wrmf_U.npy'), model.U)
-    np.save(os.path.join(model_out_root, 'wrmf_V.npy'), model.V)
+    np.save(
+        os.path.join(model_out_root, '{}_U.npy'.format(model_name)),
+        model.U.astype(np.float32)
+    )
+    np.save(
+        os.path.join(model_out_root, '{}_V.npy'.format(model_name)),
+        model.V.astype(np.float32)
+    )
     if hasattr(model, 'W'):
-        np.save(os.path.join(model_out_root, 'wrmf_W.npy'), model.W)
-
+        np.save(
+            os.path.join(model_out_root, '{}_W.npy'.format(model_name)),
+            model.W.astype(np.float32)
+        )
 
 if __name__ == "__main__":
     fire.Fire(main)

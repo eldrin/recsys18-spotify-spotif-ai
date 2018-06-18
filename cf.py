@@ -224,7 +224,7 @@ class ImplicitALS:
     def __init__(self, n_components, regularization=1e-3):
         self.model = implicit.als.AlternatingLeastSquares(
             factors=n_components, regularization=regularization,
-            use_gpu=False, iterations=15, dtype=np.float64
+            use_gpu=False, iterations=15, dtype=np.float32
         )
         # self.model = implicit.bpr.BayesianPersonalizedRanking(
         #     factors=n_components, regularization=regularization)
