@@ -80,10 +80,12 @@ class MPDSampler:
         """"""
         _, self.train, self.test, self.track2artist = _load_data(config)
         self.triplet = self.train
-        self.triplet = self.triplet[self.triplet['value'] == 1]
 
         self.n_playlists = self.triplet['playlist'].nunique()
-        self.n_tracks = self.triplet['track'].nunique()
+        self.triplet = self.triplet[self.triplet['value'] == 1]
+        self.items = list(np.unique(
+            np.concatenate([self.triplet['track'].unique(), self.test['track'].unique()])))
+        self.n_tracks = len(self.items)
         self.num_interactions = self.triplet.shape[0]
         self.batch_size = config['hyper_parameters']['batch_size']
         self.is_weight = config['hyper_parameters']['sample_weight']
@@ -108,7 +110,8 @@ class MPDSampler:
             #     lambda x: x[1],
             #     sorted(track_count.to_dict().items(), key=lambda x: x[0])
             # ))
-            f_w = track_count.to_dict().items()
+            f_w_dict = track_count.to_dict()
+            f_w = [f_w_dict[t] if t in f_w_dict else 0 for t in self.items]
 
             # # Sub-sampling
             # p_drop = dict(zip(range(len(f_w)), 1. - np.sqrt(self.threshold / f_w)))
@@ -122,9 +125,8 @@ class MPDSampler:
             # )
             # self.items = dict(enumerate(self.items))
 
-            f_w_a = np.array(map(lambda x: x[1], f_w))**.5
+            f_w_a = np.array(f_w)**.5
             c = f_w_a / f_w_a.sum() * self.c0
-            self.items = map(lambda x: x[0], f_w)
             self.items_dict = dict(enumerate(self.items))
             self.weight = dict(zip(self.items, c))
             self.pos_weight = self.w0
