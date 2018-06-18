@@ -80,10 +80,11 @@ class MPDSampler:
         """"""
         _, self.train, self.test, self.track2artist = _load_data(config)
         self.triplet = self.train
+        self.triplet = self.triplet[self.triplet['value'] == 1]
 
-        self.n_playlists = self.train['playlist'].nunique()
+        self.n_playlists = self.triplet['playlist'].nunique()
         self.n_tracks = self.triplet['track'].nunique()
-        self.num_interactions = self.train.shape[0]
+        self.num_interactions = self.triplet.shape[0]
         self.batch_size = config['hyper_parameters']['batch_size']
         self.is_weight = config['hyper_parameters']['sample_weight']
         self.weight_pow = config['hyper_parameters']['sample_weight_power']
@@ -93,8 +94,6 @@ class MPDSampler:
         self.context_shuffle = [False, True]
         self.w0 = 10  # positive weight
         self.c0 = 5  # negative initial weight
-
-        self.triplet = self.triplet[self.triplet['value'] == 1]
 
         # prepare positive sample pools
         self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(set))
