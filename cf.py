@@ -230,7 +230,7 @@ class ImplicitALS:
         #     factors=n_components, regularization=regularization)
 
     def fit(self, X):
-        X.data = X.data * 200
+        X.data = X.data * 80
         self.model.fit(X.T)
         self.U = self.model.user_factors
         self.V = self.model.item_factors

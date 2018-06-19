@@ -35,7 +35,7 @@ def main(train_fn, test_fn=None, r=10, attr_fn=None, attr_sim_fn=None,
             model = WRMF(r, beta=beta, gamma=gamma, epsilon=epsilon,
                          n_epoch=n_epoch, verbose=True)
         elif 'implicitals' in model_name:
-            model = ImplicitALS(r)
+            model = ImplicitALS(r, regularization=1e-4)
         else:
             raise ValueError(
                 '[Error] {} is not supported model!'.format(model_name)
