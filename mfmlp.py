@@ -83,8 +83,12 @@ class MPDSampler:
 
         self.n_playlists = self.triplet['playlist'].nunique()
         self.triplet = self.triplet[self.triplet['value'] == 1]
-        self.items = list(np.unique(
-            np.concatenate([self.triplet['track'].unique(), self.test['track'].unique()])))
+        if self.test is None:
+            self.items = self.triplet['track'].unique()
+        else:
+            self.items = list(np.unique(
+                np.concatenate([self.triplet['track'].unique(),
+                                self.test['track'].unique()])))
         self.n_tracks = len(self.items)
         self.num_interactions = self.triplet.shape[0]
         self.batch_size = config['hyper_parameters']['batch_size']
