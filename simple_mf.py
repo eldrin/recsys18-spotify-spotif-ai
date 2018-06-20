@@ -1,4 +1,5 @@
 import os
+from os.path import isfile
 import re
 from functools import partial
 from collections import namedtuple
@@ -30,14 +31,26 @@ if __name__ == "__main__":
     # setup some aliases
     HP = CONFIG['hyper_parameters']
 
+    # load item embedding, if available
+    x_fn = CONFIG['path']['embedding']['X']
+    if isfile(x_fn):
+        item_factors = np.load(x_fn)
+        item_train = False
+        n_components = item_factors.shape[-1]
+    else:
+        item_factors = None
+        item_train = True
+        n_components = HP['n_embedding']
+
+
     # prepare model instances
     sampler = MPDSampler(CONFIG, verbose=True)
     mf = MF(
-        n_components=HP['n_embedding'],
+        n_components=n_components,
         n_users=sampler.n_playlists,
         n_items=sampler.n_tracks,
-        user_emb=None, item_emb=None,
-        user_train=True, item_train=True,
+        user_emb=None, item_emb=item_factors,
+        user_train=True, item_train=item_train,
         sparse_embedding=True
     ).cuda()
 
