@@ -169,7 +169,7 @@ if __name__ == "__main__":
 
     # set loss / optimizer
     if HP['loss'] == 'MSE':
-        f_loss = nn.SmoothL1Loss().cuda()
+        # f_loss = nn.SmoothL1Loss().cuda()
         f_loss = nn.MSELoss().cuda()
 
         # load target (pre-trained) playlist factors
@@ -183,6 +183,27 @@ if __name__ == "__main__":
         track_factors = np.load(
             CONFIG['path']['embeddings']['V']).astype(np.float32)
 
+    elif HP['loss'] == 'all':
+        # load target (pre-trained) playlist factors
+        playlist_factors = np.load(
+            CONFIG['path']['embeddings']['U']).astype(np.float32)
+
+        # load target (pre-trained) playlist factors
+        track_factors = np.load(
+            CONFIG['path']['embeddings']['V']).astype(np.float32)
+
+        # setup total loss
+        # mse = nn.SmoothL1Loss().cuda()
+        mse = nn.MSELoss().cuda()
+        sgns = NEGCrossEntropyLoss().cuda()
+        def f_loss(h, v, pref, p, conf=None, coeff=0.5):
+            """"""
+            hv = torch.bmm(
+                v, h.view(y_pred.shape[0], y_pred.shape[-1], 1)
+            ).squeeze()
+            return coeff * sgns(hv, pref, conf) + (1.-coeff) * mse(h, p)
+
+
     sprs_prms = map(
         lambda x: x[1],
         filter(lambda kv: kv[0] in {'emb.weight'},
@@ -195,7 +216,7 @@ if __name__ == "__main__":
     )
     opt = MultipleOptimizer(
         optim.SparseAdam(sprs_prms, lr=HP['learn_rate']),
-        optim.Adam(dnse_prms, lr=HP['learn_rate'])
+        optim.Adam(dnse_prms, lr=HP['learn_rate'], amsgrad=True)
     )
 
     # main training loop
@@ -209,6 +230,8 @@ if __name__ == "__main__":
                 # parse in / out
                 pid_ = [x[0] for x in batch]  # (n_batch,)
                 pid = [playlist_dict[i] for i in pid_]
+                conf_ = [x[-1] for x in batch]
+                conf = Variable(torch.FloatTensor(conf_).cuda())
 
                 # flush grad
                 opt.zero_grad()
@@ -237,7 +260,23 @@ if __name__ == "__main__":
                     hv = torch.bmm(
                         v, y_pred.view(y_pred.shape[0], y_pred.shape[-1], 1)
                     ).squeeze()
-                    l = f_loss(hv, pref)
+                    l = f_loss(hv, pref) + ((y_pred)**2).sum()**.5
+
+                elif HP['loss'] == 'all':
+                    tid_ = [[x[1]] + x[2] for x in batch]
+                    pref_ = [[1.] + [-1.] * len(x[2]) for x in batch]
+                    pref = Variable(torch.FloatTensor(pref_).cuda())
+                    y_true = Variable(
+                        torch.from_numpy(playlist_factors[pid_]).cuda()
+                    )
+                    v = Variable(
+                        torch.from_numpy(
+                            np.array([track_factors[t] for t in tid_])
+                        ).cuda()
+                    )
+
+                    # calc loss
+                    l = f_loss(y_pred, v, pref, y_true)
 
                 # back-propagation
                 l.backward()
@@ -250,7 +289,7 @@ if __name__ == "__main__":
                     epoch.set_description(
                         '[loss : {:.4f}]'.format(float(l.data) * HP['batch_size'])
                     )
-                elif HP['loss'] == 'SGNS':
+                elif HP['loss'] == 'SGNS' or HP['loss'] == 'all':
                     epoch.set_description(
                         '[loss : {:.4f}]'.format(float(l.data))
                     )
@@ -276,7 +315,7 @@ if __name__ == "__main__":
         pid_ = [playlist_dict[jj] for jj in pid[j:j+b]]
         P.append(model.user_factor(pid_).data.cpu().numpy())
     P = np.concatenate(P, axis=0).astype(np.float32)
-    # np.save('/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/title_rnn_U.npy', P)
+    np.save('./data/models/title_rnn_U.npy', P)
 
     if sampler.test is not None:
         print('Evaluate!')

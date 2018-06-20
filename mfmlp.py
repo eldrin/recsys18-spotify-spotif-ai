@@ -95,7 +95,7 @@ class MPDSampler:
         self.context_size = [1, 5, 25, 50, 100]
         self.context_shuffle = [False, True]
         self.w0 = 10  # positive weight
-        self.c0 = 5  # negative initial weight
+        self.c0 = 1  # negative initial weight
 
         # prepare positive sample pools
         self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(set))
@@ -132,7 +132,7 @@ class MPDSampler:
             self.pos_weight = self.w0
 
         else:
-            self.items = self.triplet['track'].unique()
+            # self.items = self.triplet['track'].unique()
             self.items_dict = dict(enumerate(self.items))
             self.weight = dict(zip(self.items, [1] * len(self.items)))
             self.pos_weight = self.w0
