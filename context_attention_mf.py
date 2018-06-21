@@ -110,7 +110,7 @@ class MF(nn.Module):
             q = q.permute(0, 2, 1)  # (n_batch, n_hid, n_neg)
 
         pred = torch.bmm(p, q).squeeze()
-        return pred
+        return pred, p, q
 
 
 class ItemAttentionCF(nn.Module):
