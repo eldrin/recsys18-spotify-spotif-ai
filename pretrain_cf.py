@@ -1,15 +1,16 @@
 import os
+from os.path import isfile
 import numpy as np
 
 from util import read_data
-from cf import WRMFAttrSim, WRMF, ImplicitALS, TSVD
+from cf import WRMFAttrSim, WRMF, ImplicitALS, TSVD, UserWRMF
 from evaluation import evaluate
 
 import fire
 
 
 def main(train_fn, test_fn=None, r=10, attr_fn=None, attr_sim_fn=None,
-         gamma=1, epsilon=1, n_epoch=30, cutoff=500,
+         item_factor_fn=None, gamma=1, epsilon=1, n_epoch=30, cutoff=500,
          beta=1, beta_a=1, beta_b=1, model_out_root=None, model_name='wrmf'):
     """"""
     print('Loading data...')
@@ -17,6 +18,11 @@ def main(train_fn, test_fn=None, r=10, attr_fn=None, attr_sim_fn=None,
     if test_fn is not None:
         dt, yt = read_data(test_fn, shape=d.shape)
     a, b = None, None
+
+    if item_factor_fn is not None and isfile(item_factor_fn):
+        item_factor = np.load(item_factor_fn)
+    else:
+        item_factor = None
 
     if attr_fn is not None:
         a, _ = read_data(attr_fn)
@@ -32,8 +38,13 @@ def main(train_fn, test_fn=None, r=10, attr_fn=None, attr_sim_fn=None,
         model.fit(d, a, b)
     else:
         if 'wrmf' in model_name:
-            model = WRMF(r, beta=beta, gamma=gamma, epsilon=epsilon,
-                         n_epoch=n_epoch, verbose=True)
+            if item_factor is not None:
+                model = UserWRMF(r, item_factor,
+                                 beta=beta, gamma=gamma, epsilon=epsilon,
+                                 n_epoch=n_epoch, verbose=True)
+            else:
+                model = WRMF(r, beta=beta, gamma=gamma, epsilon=epsilon,
+                             n_epoch=n_epoch, verbose=True)
         elif 'implicitals' in model_name:
             model = ImplicitALS(r, regularization=1e-4)
         else:

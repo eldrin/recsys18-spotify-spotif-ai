@@ -1,4 +1,5 @@
 import os
+import time
 from functools import partial
 from scipy import sparse as sp
 import numpy as np
@@ -25,7 +26,7 @@ sys.path.append(os.path.join(os.getcwd(), 'wmf'))
 from wmf import factorize, cofactorize, cofactorize2
 from wmf import log_surplus_confidence_matrix
 from wmf import linear_surplus_confidence_matrix
-from wmf import recompute_factors_bias
+from wmf import recompute_factors_bias, recompute_factors
 from wmf import iter_rows
 
 sys.path.append(os.path.join(os.getcwd(), 'RecsysChallengeTools'))
@@ -819,6 +820,75 @@ class WRMF:
         self.V = self.V_.astype(np.float32)
         self.b_u = None
         self.b_i = None
+
+
+class UserWRMF:
+    """"""
+    def __init__(self, n_components, item_factor, init_factor=1e-1, beta=1e-1,
+                 gamma=1, epsilon=1, n_epoch=10, dtype='float32',
+                 verbose=False, confidence_fnc=log_surplus_confidence_matrix):
+        """"""
+        self.n_components_ = n_components
+        self.n_epoch = n_epoch
+        self.beta = beta  # regularization weight
+        self.init_factor = init_factor  # init weight
+
+        self.gamma = gamma
+        self.epsilon = epsilon
+
+        self.confidence_fnc = confidence_fnc
+        if confidence_fnc == linear_surplus_confidence_matrix:
+            self.confidence_fnc = partial(confidence_fnc, alpha=self.gamma)
+        elif confidence_fnc == log_surplus_confidence_matrix:
+            self.confidence_fnc = partial(
+                confidence_fnc, alpha=self.gamma, epsilon=self.epsilon)
+
+        self.dtype = dtype
+        self.U = None  # u factors (torch variable / (n_u, n_r))
+        self.V = item_factor
+        self.loss_curve = []
+        self.verbose = verbose
+        self.beta = beta
+
+    def predict_k(self, u, k=500):
+        """"""
+        r = self.U[u].dot(self.V.T)
+        return np.argsort(r)[::-1][:k]
+
+    def predict(self, u, i):
+        """"""
+        return self.U[u].dot(self.V[i].T)
+
+    def fit(self, X):
+        """
+        X = interaction matrix
+        """
+        X = X.tocsr()
+        S = self.confidence_fnc(X)
+
+        if self.verbose:
+            print "precompute transpose"
+            start_time = time.time()
+
+        if self.verbose:
+            print "  took %.3f seconds" % (time.time() - start_time)
+            print "run ALS algorithm"
+            start_time = time.time()
+
+        U = None # no need to initialize U, it will be overwritten anyway
+        V = self.V.astype(np.float32)
+
+        for i in xrange(self.n_epoch):
+            if self.verbose:
+                print "  iteration %d" % i
+                print "    recompute user factors U"
+
+            U = recompute_factors(V, S, self.beta, self.dtype)
+
+            if self.verbose:
+                print "    time since start: %.3f seconds" % (time.time() - start_time)
+
+        self.U = U.astype(np.float32)
 
 
 class WRMFAttrSim:

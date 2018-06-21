@@ -32,7 +32,7 @@ if __name__ == "__main__":
     HP = CONFIG['hyper_parameters']
 
     # load item embedding, if available
-    x_fn = CONFIG['path']['embedding']['X']
+    x_fn = CONFIG['path']['embeddings']['X']
     if isfile(x_fn):
         item_factors = np.load(x_fn)
         item_train = False
