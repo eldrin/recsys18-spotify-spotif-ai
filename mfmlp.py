@@ -163,13 +163,16 @@ class MPDSampler:
             conf.append(self.pos_weight)
 
             # add context
-            context = pos_i - set([i])
-            if len(context) > 0:
-                N = filter(lambda x: x <= len(context), self.context_size)
-                context = np.random.choice(
-                    list(context), np.random.choice(N), replace=False)
-            else:  # randomly pick popular songs...
-                context = np.random.choice(100000, 5, False)
+            if self.with_context:
+                context = pos_i - set([i])
+                if len(context) > 0:
+                    N = filter(lambda x: x <= len(context), self.context_size)
+                    context = np.random.choice(
+                        list(context), np.random.choice(N), replace=False)
+                else:  # randomly pick popular songs...
+                    context = np.random.choice(100000, 5, False)
+            else:
+                context = 0
 
             # draw negative samples (for-loop)
             for k in xrange(self.neg):

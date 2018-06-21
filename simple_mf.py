@@ -7,6 +7,7 @@ import cPickle as pkl
 import pandas as pd
 import numpy as np
 from sklearn.utils import shuffle
+from sklearn.decomposition import PCA
 
 import torch
 from torch import nn
@@ -23,8 +24,11 @@ from metrics import ndcg, r_precision, playlist_extender_clicks
 NDCG = partial(ndcg, k=500)
 
 from mfmlp import MPDSampler, NEGCrossEntropyLoss
-from cfatt_conf import CONFIG
+from simplemf_conf import CONFIG
 from context_attention_mf import MF
+
+ON_GPU = True
+IS_PCA = False
 
 if __name__ == "__main__":
     """"""
@@ -37,6 +41,10 @@ if __name__ == "__main__":
         item_factors = np.load(x_fn)
         item_train = False
         n_components = item_factors.shape[-1]
+        if IS_PCA:
+            pca = PCA(whiten=True)
+            item_factors = pca.fit_transform(item_factors)
+
     else:
         item_factors = None
         item_train = True
@@ -52,12 +60,16 @@ if __name__ == "__main__":
         user_emb=None, item_emb=item_factors,
         user_train=True, item_train=item_train,
         sparse_embedding=True
-    ).cuda()
+    )
+    if ON_GPU:
+        mf = mf.cuda()
 
     params = filter(lambda p: p.requires_grad, mf.parameters())
 
     # set loss / optimizer
-    f_loss = NEGCrossEntropyLoss().cuda()
+    f_loss = NEGCrossEntropyLoss()
+    if ON_GPU:
+        f_loss = f_loss.cuda()
     # opt = HP['optimizer'](params, weight_decay=HP['l2'], lr=HP['learn_rate'])
     opt = HP['optimizer'](params, lr=HP['learn_rate'])
 
@@ -74,26 +86,27 @@ if __name__ == "__main__":
                 pref_ = [[1.] + [-1.] * len(x[2]) for x in batch]
                 conf_ = [x[-1] for x in batch]
 
-                # get the mask
-                context = [list(x[-1]) for x in batch]
-                max_len = max(map(len, context))
-                context = [a + [-1] * (max_len - len(a)) for a in context]
-
-                pid = Variable(torch.LongTensor(pid_).cuda())
-                tid = Variable(torch.LongTensor(tid_).cuda())
-                pref = Variable(torch.FloatTensor(pref_).cuda())
-                conf = Variable(torch.FloatTensor(conf_).cuda())
-                context = Variable(torch.LongTensor(context).cuda())
+                if ON_GPU:
+                    pid = Variable(torch.LongTensor(pid_).cuda())
+                    tid = Variable(torch.LongTensor(tid_).cuda())
+                    pref = Variable(torch.FloatTensor(pref_).cuda())
+                    conf = Variable(torch.FloatTensor(conf_).cuda())
+                else:
+                    pid = Variable(torch.LongTensor(pid_))
+                    tid = Variable(torch.LongTensor(tid_))
+                    pref = Variable(torch.FloatTensor(pref_))
+                    conf = Variable(torch.FloatTensor(conf_))
 
                 # flush grad
                 opt.zero_grad()
 
                 # forward pass
-                y_pred = mf.forward(pid, tid)
+                y_pred, p_, q_ = mf.forward(pid, tid)
 
                 # calc loss
                 l = f_loss(y_pred, pref, conf)
                 # l = f_loss(y_pred, pref)
+                # l += HP['l2'] * (p_**2).mean()**.5
 
                 # back-propagation
                 l.backward()
@@ -110,11 +123,13 @@ if __name__ == "__main__":
     # switch off to evaluation mode
     mf.eval()
 
-    # 1) get item factors first
-    Q = mf.item_emb.weight.data.cpu().numpy()
-
-    # 2) get playlist factors
-    P = mf.user_emb.weight.data.cpu().numpy()
+    # get factors
+    if ON_GPU:
+        P = mf.user_emb.weight.data.cpu().numpy()
+        Q = mf.item_emb.weight.data.cpu().numpy()
+    else:
+        Q = mf.item_emb.weight.data.numpy()
+        P = mf.user_emb.weight.data.numpy()
 
     if sampler.test is not None:
         print('Evaluate!')

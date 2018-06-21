@@ -796,8 +796,9 @@ class WRMF:
 
     def predict_k(self, u, k=500):
         """"""
-        r = self.U[u].dot(self.V.T)
-        return np.argsort(r)[::-1][:k]
+        r = -self.U[u].dot(self.V.T)
+        ix = np.argpartition(r, k)[:k]
+        return ix[r[ix].argsort()]
 
     def predict(self, u, i):
         """"""
@@ -852,8 +853,9 @@ class UserWRMF:
 
     def predict_k(self, u, k=500):
         """"""
-        r = self.U[u].dot(self.V.T)
-        return np.argsort(r)[::-1][:k]
+        r = -self.U[u].dot(self.V.T)
+        ix = np.argpartition(r, k)[:k]
+        return ix[r[ix].argsort()]
 
     def predict(self, u, i):
         """"""
@@ -920,8 +922,9 @@ class WRMFAttrSim:
 
     def predict_k(self, u, k=500):
         """"""
-        r = self.U[u].dot(self.V.T)
-        return np.argsort(r)[::-1][:k]
+        r = -self.U[u].dot(self.V.T)
+        ix = np.argpartition(r, k)[:k]
+        return ix[r[ix].argsort()]
 
     def fit(self, X, A, B, val=None):
         """
