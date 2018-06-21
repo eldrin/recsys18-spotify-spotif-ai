@@ -165,3 +165,6 @@ if __name__ == "__main__":
 
         print('R Precision: {:.4f}'.format(np.mean(rprec)))
         print('NDCG: {:.4f}'.format(np.mean(ndcg)))
+
+    # save!
+    np.save('./data/afeat_spotify_U.npy', P)
