@@ -11,6 +11,7 @@ from sklearn.decomposition import PCA
 
 import torch
 from torch import nn
+from torch import optim
 import torch.nn.functional as F
 from torch.autograd import Variable
 
@@ -25,10 +26,82 @@ NDCG = partial(ndcg, k=500)
 
 from mfmlp import MPDSampler, NEGCrossEntropyLoss
 from simplemf_conf import CONFIG
-from context_attention_mf import MF
+from context_attention_mf import MF, init_embedding_layer, check_emb_shape
+from util import MultipleOptimizer
 
-ON_GPU = True
+ON_GPU = False
 IS_PCA = False
+
+class NNMF(nn.Module):
+    """"""
+    def __init__(self, n_components, n_hid, n_users, n_items, user_emb, item_emb,
+                 user_train=True, item_train=True, sparse_embedding=True):
+        """"""
+        super(NNMF, self).__init__()
+        self.n_components = n_components
+        self.n_users = n_users
+        self.n_items = n_items
+
+        check_emb_shape(user_emb, item_emb, n_components)
+
+        # user embedding
+        user_r, self.user_emb = init_embedding_layer(
+            user_emb, n_users, n_components, user_train, sparse_embedding)
+
+        # item embedding
+        item_r, self.item_emb = init_embedding_layer(
+            item_emb, n_items, n_components, item_train, sparse_embedding)
+
+        # # metric layers
+        # self.h1_user = nn.Linear(user_r, n_hid)
+        # self.h1_item = nn.Linear(item_r, n_hid)
+        # self.h2 = nn.Linear(n_hid, n_hid)
+        # self.h3 = nn.Linear(n_hid, 1)
+        self.hu1 = nn.Linear(user_r, n_hid)
+        self.hu2 = nn.Linear(n_hid, n_hid)
+        self.huo = nn.Linear(n_hid, n_hid)
+        self.hi1 = nn.Linear(item_r, n_hid)
+        self.hio = nn.Linear(n_hid, n_hid)
+
+    # def _metric(self, p, q):
+    #     """"""
+    #     h = F.relu(self.h1_user(p) + self.h1_item(q))
+    #     h = F.relu(self.h1(h))
+    #     h = F.relu(self.h2(h))
+    #     return self.h3(h).squeeze()
+
+    def user_factor(self, p):
+        """"""
+        p = F.relu(self.hu1(p))
+        p = F.relu(self.hu2(p))
+        p = self.huo(p)
+        return p
+
+    def item_factor(self, q):
+        """"""
+        q = F.relu(self.hi1(q))
+        q = self.hio(q)
+        return q
+
+    def forward(self, u, i):
+        """"""
+        p = self.user_emb(u)
+        q = self.item_emb(i)
+        # pred = self._metric(p, q)
+        p = self.user_factor(p)
+        q = self.item_factor(q)
+
+        if p.ndimension() == 2:
+            p = p.view(p.shape[0], 1, p.shape[-1])
+
+        if q.ndimension() == 2:
+            q = q.view(q.shape[0], q.shape[-1], 1)
+        elif q.ndimension() == 3:
+            q = q.permute(0, 2, 1)  # (n_batch, n_hid, n_neg)
+
+        pred = torch.bmm(p, q).squeeze()
+        return pred, p, q
+
 
 if __name__ == "__main__":
     """"""
@@ -53,8 +126,17 @@ if __name__ == "__main__":
 
     # prepare model instances
     sampler = MPDSampler(CONFIG, verbose=True)
-    mf = MF(
+    # mf = MF(
+    #     n_components=n_components,
+    #     n_users=sampler.n_playlists,
+    #     n_items=sampler.n_tracks,
+    #     user_emb=None, item_emb=item_factors,
+    #     user_train=True, item_train=item_train,
+    #     sparse_embedding=True
+    # )
+    mf = NNMF(
         n_components=n_components,
+        n_hid=64,
         n_users=sampler.n_playlists,
         n_items=sampler.n_tracks,
         user_emb=None, item_emb=item_factors,
@@ -64,14 +146,29 @@ if __name__ == "__main__":
     if ON_GPU:
         mf = mf.cuda()
 
-    params = filter(lambda p: p.requires_grad, mf.parameters())
-
     # set loss / optimizer
     f_loss = NEGCrossEntropyLoss()
     if ON_GPU:
         f_loss = f_loss.cuda()
-    # opt = HP['optimizer'](params, weight_decay=HP['l2'], lr=HP['learn_rate'])
-    opt = HP['optimizer'](params, lr=HP['learn_rate'])
+
+    sprs_prms = map(
+        lambda x: x[1],
+        filter(lambda kv: 'emb' in kv[0] and kv[1].requires_grad,
+               mf.named_parameters())
+    )
+    dnse_prms = map(
+        lambda x: x[1],
+        filter(lambda kv: 'emb' not in kv[0],
+               mf.named_parameters())
+    )
+    opt = MultipleOptimizer(
+        optim.SparseAdam(sprs_prms, lr=HP['learn_rate']),
+        optim.Adam(dnse_prms, lr=HP['learn_rate'], amsgrad=True)
+    )
+
+    # params = filter(lambda p: p.requires_grad, mf.parameters())
+    # # opt = HP['optimizer'](params, weight_decay=HP['l2'], lr=HP['learn_rate'])
+    # opt = HP['optimizer'](params, lr=HP['learn_rate'])
 
     # main training loop
     mf.train()
@@ -125,11 +222,15 @@ if __name__ == "__main__":
 
     # get factors
     if ON_GPU:
-        P = mf.user_emb.weight.data.cpu().numpy()
-        Q = mf.item_emb.weight.data.cpu().numpy()
+        # P = mf.user_emb.weight.data.cpu().numpy()
+        # Q = mf.item_emb.weight.data.cpu().numpy()
+        P = mf.user_factor(mf.user_emb.weight.data).data.cpu().numpy()
+        Q = mf.item_factor(mf.item_emb.weight.data).data.cpu().numpy()
     else:
-        Q = mf.item_emb.weight.data.numpy()
-        P = mf.user_emb.weight.data.numpy()
+        # Q = mf.item_emb.weight.data.numpy()
+        # P = mf.user_emb.weight.data.numpy()
+        P = mf.user_factor(mf.user_emb.weight.data).data.numpy()
+        Q = mf.item_factor(mf.item_emb.weight.data).data.numpy()
 
     if sampler.test is not None:
         print('Evaluate!')
@@ -150,7 +251,6 @@ if __name__ == "__main__":
                 true_tr = set()
 
             # predict k
-            pred = []
             pred = -P[u].dot(Q.T)
             ind = np.argpartition(pred, 650)[:650]
             ind = ind[pred[ind].argsort()]
