@@ -268,3 +268,4 @@ if __name__ == "__main__":
 
     # save!
     np.save('./data/afeat_spotify_U.npy', P)
+    np.save('./data/afeat_spotify_V.npy', Q)
