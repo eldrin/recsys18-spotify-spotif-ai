@@ -451,7 +451,6 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     cts.to_csv(join(out_path, 'playlist_artist_ss_test.csv'), header=None, index=None)
     a.to_csv(join(out_path, 'artist_track_ss.csv'), header=None, index=None)
     b.to_csv(join(out_path, 'artist_artist_ss.csv'), header=None, index=None)
-    f.to_csv(join(out_path, 'track_audio_feature_ss.csv'), index=None)
 
     # normalize feature and save
     sclr = QuantileTransformer(1000, 'normal')
@@ -461,6 +460,7 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     median = f.median()
     f = f.fillna(median)
     f = pd.get_dummies(f, columns=['key', 'mode', 'time_signature'])
+    f.to_csv(join(out_path, 'track_audio_feature_ss.csv'), index=None)
 
     f = sclr.fit_transform(f)
     np.save(join(out_path, 'track_audio_feature_ss.npy'), f)
@@ -590,7 +590,6 @@ def prepare_full_data(r_fn, t_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     ctr.to_csv('/mnt/bulk/recsys18/playlist_artist_train.csv', header=None, index=None)
     a.to_csv('/mnt/bulk/recsys18/artist_track.csv', header=None, index=None)
     b.to_csv('/mnt/bulk/recsys18/artist_artist.csv', header=None, index=None)
-    f.to_csv('/mnt/bulk/recsys18/track_audio_feature.csv', index=None)
 
     # normalize feature and save
     sclr = QuantileTransformer(1000, 'normal')
@@ -600,6 +599,7 @@ def prepare_full_data(r_fn, t_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     median = f.median()
     f = f.fillna(median)
     f = pd.get_dummies(f, columns=['key', 'mode', 'time_signature'])
+    f.to_csv('/mnt/bulk/recsys18/track_audio_feature.csv', index=None)
 
     f = sclr.fit_transform(f)
     np.save('/mnt/bulk/recsys18/track_audio_feature.npy', f)
