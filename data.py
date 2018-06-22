@@ -404,10 +404,6 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     # (training_set, test_set, test_id, track_artist, artist_artist)
     rtr, rts, a, b = data
     r = pd.concat([rtr, rts], axis=0)  # for getting entire track list
-    f = F.reindex([track_id2uri[i] for i in r[1].unique()])
-    median = f.median()
-    f = f.fillna(median)
-    f = pd.get_dummies(f, columns=['key', 'mode', 'time_signature'])
 
     print('Re-indexing!...')
     # update hashing {old_ix: new_ix}
@@ -459,6 +455,13 @@ def subsample_dataset(r_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
 
     # normalize feature and save
     sclr = QuantileTransformer(1000, 'normal')
+
+    ix2uri = {ix: uri for _, (_, uri, ix) in new_tr_dict.iteritems()}
+    f = F.reindex([ix2uri[i] for i in range(len(ix2uri))])
+    median = f.median()
+    f = f.fillna(median)
+    f = pd.get_dummies(f, columns=['key', 'mode', 'time_signature'])
+
     f = sclr.fit_transform(f)
     np.save(join(out_path, 'track_audio_feature_ss.npy'), f)
 
@@ -549,11 +552,6 @@ def prepare_full_data(r_fn, t_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
     # (training_set, test_set, test_id, track_artist, artist_artist)
     rtr, a, b = R, A, B
 
-    f = F
-    median = f.median()
-    f = f.fillna(median)
-    f = pd.get_dummies(f, columns=['key', 'mode', 'time_signature'])
-
     print('Re-indexing!...')
     # update hashing {old_ix: new_ix}
     new_pl_hash = {v: k for k, v in enumerate(rtr[0].unique())}
@@ -596,6 +594,13 @@ def prepare_full_data(r_fn, t_fn, b_fn, f_fn, p_fn, uniq_playlist_fn,
 
     # normalize feature and save
     sclr = QuantileTransformer(1000, 'normal')
+
+    ix2uri = {ix: uri for _, (_, uri, ix) in new_tr_dict.iteritems()}
+    f = F.reindex([ix2uri[i] for i in range(len(ix2uri))])
+    median = f.median()
+    f = f.fillna(median)
+    f = pd.get_dummies(f, columns=['key', 'mode', 'time_signature'])
+
     f = sclr.fit_transform(f)
     np.save('/mnt/bulk/recsys18/track_audio_feature.npy', f)
 
