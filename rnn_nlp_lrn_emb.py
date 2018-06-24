@@ -94,7 +94,6 @@ class UserRNN(nn.Module):
         self.non_lin = non_lin
         self.n_out = n_out
         self.learn_metric = learn_metric
-        self.embs = {}
 
         # setup learnable embedding layers
         self.emb = nn.Embedding(
@@ -129,7 +128,9 @@ class UserRNN(nn.Module):
         emb_pl = self.emb(Variable(pid.seq))
         emb_pl = pack_padded_sequence(emb_pl, pid.lengths.tolist(), batch_first=True)
         out_u, hid_u = self.user_rnn(emb_pl)
-        return self.user_out(pid.unsort(hid_u[0][-1]))
+
+        out_u = self.user_out(pid.unsort(hid_u[0][-1]))
+        return out_u
 
 
 if __name__ == "__main__":
@@ -166,6 +167,10 @@ if __name__ == "__main__":
         layer_norm=False, drop_out=0, learn_metric=True,
         sparse_embedding=True
     ).cuda()
+    """"""
+    track_factors = nn.Embedding(
+        sampler.n_tracks, HP['n_out_embedding'], sparse=True)
+    """"""
 
     # set loss / optimizer
     if HP['loss'] == 'MSE':
@@ -180,8 +185,10 @@ if __name__ == "__main__":
         f_loss = NEGCrossEntropyLoss().cuda()
 
         # load target (pre-trained) playlist factors
+        """
         track_factors = np.load(
             CONFIG['path']['embeddings']['V']).astype(np.float32)
+        """
 
     elif HP['loss'] == 'all':
         # load target (pre-trained) playlist factors
@@ -209,6 +216,9 @@ if __name__ == "__main__":
         filter(lambda kv: kv[0] in {'emb.weight'},
                model.named_parameters())
     )
+    """"""
+    sprs_prms.append(track_factors.weight)
+    """"""
     dnse_prms = map(
         lambda x: x[1],
         filter(lambda kv: kv[0] not in {'emb.weight'},
@@ -252,15 +262,24 @@ if __name__ == "__main__":
                     pref = Variable(torch.FloatTensor(pref_).cuda())
 
                     # calc loss
+                    """
                     v = Variable(
                         torch.from_numpy(
                             np.array([track_factors[t] for t in tid_])
                         ).cuda()
                     )
+                    """
+                    """"""
+                    v = track_factors(
+                        Variable(torch.LongTensor(tid_))
+                    ).cuda()
+                    """"""
                     hv = torch.bmm(
                         v, y_pred.view(y_pred.shape[0], y_pred.shape[-1], 1)
                     ).squeeze()
-                    l = f_loss(hv, pref) + ((y_pred)**2).sum()**.5
+                    l = f_loss(hv, pref)
+                    l += HP['l2'] * ((y_pred)**2).mean()**.5
+                    l += HP['l2'] * (v**2).mean()**.5
 
                 elif HP['loss'] == 'all':
                     tid_ = [[x[1]] + x[2] for x in batch]
@@ -302,7 +321,12 @@ if __name__ == "__main__":
 
     # 1) extract playlist / track factors first from embedding-rnn blocks
     #   1.1) ext item factors first
-    Q = track_factors
+    # Q = track_factors
+    """"""
+    Q = track_factors.weight.data.numpy()
+    np.save(CONFIG['path']['model_out']['V'], Q)
+    del track_factors
+    """"""
 
     #   1.2) ext playlist factors
     b = 500
@@ -315,7 +339,7 @@ if __name__ == "__main__":
         pid_ = [playlist_dict[jj] for jj in pid[j:j+b]]
         P.append(model.user_factor(pid_).data.cpu().numpy())
     P = np.concatenate(P, axis=0).astype(np.float32)
-    np.save('./data/models/title_rnn_U.npy', P)
+    np.save(CONFIG['path']['model_out']['U'], P)
 
     if sampler.test is not None:
         print('Evaluate!')
