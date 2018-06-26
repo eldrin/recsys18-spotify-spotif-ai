@@ -217,7 +217,8 @@ if __name__ == "__main__":
                model.named_parameters())
     )
     """"""
-    sprs_prms.append(track_factors.weight)
+    if HP['loss'] == 'SGNS':
+        sprs_prms.append(track_factors.weight)
     """"""
     dnse_prms = map(
         lambda x: x[1],
@@ -321,11 +322,15 @@ if __name__ == "__main__":
 
     # 1) extract playlist / track factors first from embedding-rnn blocks
     #   1.1) ext item factors first
-    # Q = track_factors
     """"""
-    Q = track_factors.weight.data.numpy()
+    if HP['loss'] == 'SGNS':
+        Q = track_factors.weight.data.numpy()
+    else:
+        Q = track_factors
     np.save(CONFIG['path']['model_out']['V'], Q)
-    del track_factors
+    del track_factors, Q
+    Q = np.load(
+        CONFIG['path']['model_out']['V'], mmap_mode='r')
     """"""
 
     #   1.2) ext playlist factors
@@ -340,6 +345,9 @@ if __name__ == "__main__":
         P.append(model.user_factor(pid_).data.cpu().numpy())
     P = np.concatenate(P, axis=0).astype(np.float32)
     np.save(CONFIG['path']['model_out']['U'], P)
+    del P
+    P = np.load(
+        CONFIG['path']['model_out']['U'], mmap_mode='r')
 
     if sampler.test is not None:
         print('Evaluate!')
