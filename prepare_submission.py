@@ -42,7 +42,10 @@ def main(out_fn, pl_fac_fn, tr_fac_fn, pl_hash_fn, tr_hash_fn, challenge_path, n
 
         # get initial prediction (for batch, 1k candidates)
         pids_ = [pid2ix[ix] for ix in pids.values]
-        pred_raw_batch = np.argsort(U[pids_].dot(V.T), axis=1)[:, ::-1][:, :n_cand]
+        r = -U[pids_].dot(V.T)
+        ix = np.argpartition(r, n_cand, axis=1)[:, :n_cand]
+        pred_raw_ix = r[np.arange(ix.shape[0])[:,None], ix].argsort(1)
+        pred_raw_batch = ix[np.arange(ix.shape[0])[:,None], pred_raw_ix]
 
         # quick sanity check
         assert tracks.shape[0] == pred_raw_batch.shape[0]
