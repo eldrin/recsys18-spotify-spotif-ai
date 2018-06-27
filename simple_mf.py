@@ -29,8 +29,25 @@ from simplemf_conf import CONFIG
 from context_attention_mf import MF, init_embedding_layer, check_emb_shape
 from util import MultipleOptimizer
 
-ON_GPU = False
+ON_GPU = True
 IS_PCA = False
+
+
+def load_embedding(emb_fn, d, is_pca):
+    if isfile(emb_fn):
+        item_factors = np.load(emb_fn)
+        item_train = False
+        n_components = item_factors.shape[-1]
+        if is_pca:
+            pca = PCA(whiten=True)
+            item_factors = pca.fit_transform(item_factors)
+    else:
+        item_factors = None
+        item_train = True
+        n_components = d
+
+    return item_factors, item_train, n_components
+
 
 class NNMF(nn.Module):
     """"""
@@ -42,26 +59,33 @@ class NNMF(nn.Module):
         self.n_users = n_users
         self.n_items = n_items
 
-        check_emb_shape(user_emb, item_emb, n_components)
+        # check_emb_shape(user_emb, item_emb, n_components)
 
         # user embedding
         user_r, self.user_emb = init_embedding_layer(
             user_emb, n_users, n_components, user_train, sparse_embedding)
 
         # item embedding
+        # item_r, self.item_emb = init_embedding_layer(
+        #     item_emb, n_items, n_components, item_train, sparse_embedding)
         item_r, self.item_emb = init_embedding_layer(
-            item_emb, n_items, n_components, item_train, sparse_embedding)
+            item_emb, n_items, n_hid, item_train, sparse_embedding)
 
         # # metric layers
         # self.h1_user = nn.Linear(user_r, n_hid)
         # self.h1_item = nn.Linear(item_r, n_hid)
         # self.h2 = nn.Linear(n_hid, n_hid)
         # self.h3 = nn.Linear(n_hid, 1)
+
         self.hu1 = nn.Linear(user_r, n_hid)
-        self.hu2 = nn.Linear(n_hid, n_hid)
+        # self.hu2 = nn.Linear(n_hid, n_hid)
+        # self.hu3 = nn.Linear(n_hid, n_hid)
+        # self.hu4 = nn.Linear(n_hid, n_hid)
+        # self.hu5 = nn.Linear(n_hid, n_hid)
         self.huo = nn.Linear(n_hid, n_hid)
-        self.hi1 = nn.Linear(item_r, n_hid)
-        self.hio = nn.Linear(n_hid, n_hid)
+
+        # self.hi1 = nn.Linear(item_r, n_hid)
+        # self.hio = nn.Linear(n_hid, n_hid)
 
     # def _metric(self, p, q):
     #     """"""
@@ -73,14 +97,17 @@ class NNMF(nn.Module):
     def user_factor(self, p):
         """"""
         p = F.relu(self.hu1(p))
-        p = F.relu(self.hu2(p))
+        # p = F.selu(self.hu2(p))
+        # p = F.selu(self.hu3(p))
+        # p = F.selu(self.hu4(p))
+        # p = F.selu(self.hu5(p))
         p = self.huo(p)
         return p
 
     def item_factor(self, q):
         """"""
-        q = F.relu(self.hi1(q))
-        q = self.hio(q)
+        # q = F.relu(self.hi1(q))
+        # q = self.hio(q)
         return q
 
     def forward(self, u, i):
@@ -110,65 +137,72 @@ if __name__ == "__main__":
 
     # load item embedding, if available
     x_fn = CONFIG['path']['embeddings']['X']
-    if isfile(x_fn):
-        item_factors = np.load(x_fn)
-        item_train = False
-        n_components = item_factors.shape[-1]
-        if IS_PCA:
-            pca = PCA(whiten=True)
-            item_factors = pca.fit_transform(item_factors)
+    item_factors, item_train, n_components = load_embedding(
+        x_fn, HP['n_embedding'], IS_PCA)
+    # item_factors, item_train, n_components = None, True, HP['n_hid']
 
-    else:
-        item_factors = None
-        item_train = True
-        n_components = HP['n_embedding']
-
+    # u_fn = CONFIG['path']['embeddings']['U']
+    # playlist_factors, playlist_train, n_components = load_embedding(
+    #     u_fn, HP['n_embedding'], IS_PCA)
 
     # prepare model instances
+    print('Init sampler!')
     sampler = MPDSampler(CONFIG, verbose=True)
-    # mf = MF(
-    #     n_components=n_components,
-    #     n_users=sampler.n_playlists,
-    #     n_items=sampler.n_tracks,
-    #     user_emb=None, item_emb=item_factors,
-    #     user_train=True, item_train=item_train,
-    #     sparse_embedding=True
-    # )
-    mf = NNMF(
+
+    print('Init model!')
+    mf = MF(
         n_components=n_components,
-        n_hid=64,
         n_users=sampler.n_playlists,
         n_items=sampler.n_tracks,
         user_emb=None, item_emb=item_factors,
         user_train=True, item_train=item_train,
         sparse_embedding=True
     )
+    mf2 = MF(
+        n_components=n_components,
+        n_users=sampler.n_playlists,
+        n_items=sampler.n_tracks,
+        user_emb=None, item_emb=None,
+        user_train=True, item_train=True,
+        sparse_embedding=True
+    )
+    # mf = NNMF(
+    #     n_components=n_components,
+    #     n_hid=300,
+    #     n_users=sampler.n_playlists,
+    #     n_items=sampler.n_tracks,
+    #     user_emb=playlist_factors, item_emb=item_factors,
+    #     user_train=playlist_train, item_train=item_train,
+    #     sparse_embedding=True
+    # )
     if ON_GPU:
         mf = mf.cuda()
+        mf2 = mf.cuda()
 
     # set loss / optimizer
     f_loss = NEGCrossEntropyLoss()
     if ON_GPU:
         f_loss = f_loss.cuda()
 
-    sprs_prms = map(
-        lambda x: x[1],
-        filter(lambda kv: 'emb' in kv[0] and kv[1].requires_grad,
-               mf.named_parameters())
-    )
-    dnse_prms = map(
-        lambda x: x[1],
-        filter(lambda kv: 'emb' not in kv[0],
-               mf.named_parameters())
-    )
-    opt = MultipleOptimizer(
-        optim.SparseAdam(sprs_prms, lr=HP['learn_rate']),
-        optim.Adam(dnse_prms, lr=HP['learn_rate'], amsgrad=True)
-    )
+    # sprs_prms = map(
+    #     lambda x: x[1],
+    #     filter(lambda kv: 'emb' in kv[0] and kv[1].requires_grad,
+    #            mf.named_parameters())
+    # )
+    # dnse_prms = map(
+    #     lambda x: x[1],
+    #     filter(lambda kv: 'emb' not in kv[0],
+    #            mf.named_parameters())
+    # )
+    # opt = MultipleOptimizer(
+    #     optim.SparseAdam(sprs_prms, lr=HP['learn_rate']),
+    #     # optim.Adam(dnse_prms, lr=HP['learn_rate'], amsgrad=True)
+    #     optim.Adam(dnse_prms, lr=HP['learn_rate'])
+    # )
 
-    # params = filter(lambda p: p.requires_grad, mf.parameters())
-    # # opt = HP['optimizer'](params, weight_decay=HP['l2'], lr=HP['learn_rate'])
-    # opt = HP['optimizer'](params, lr=HP['learn_rate'])
+    params = filter(lambda p: p.requires_grad, mf.parameters())
+    # opt = HP['optimizer'](params, weight_decay=HP['l2'], lr=HP['learn_rate'])
+    opt = HP['optimizer'](params, lr=HP['learn_rate'])
 
     # main training loop
     mf.train()
@@ -198,12 +232,14 @@ if __name__ == "__main__":
                 opt.zero_grad()
 
                 # forward pass
-                y_pred, p_, q_ = mf.forward(pid, tid)
+                pq, p_, q_ = mf.forward(pid, tid)
+                pq2, p_2, q_2 = mf2.forward(pid, tid)
 
                 # calc loss
-                l = f_loss(y_pred, pref, conf)
-                # l = f_loss(y_pred, pref)
-                # l += HP['l2'] * (p_**2).mean()**.5
+                # l = f_loss(y_pred, pref, conf)
+                l = f_loss(pq + pq2, pref)
+                l += HP['l2'] * ((p_+p_2)**2).mean()**.5
+                l += HP['l2'] * ((q_+q_2)**2).mean()**.5
 
                 # back-propagation
                 l.backward()
@@ -224,13 +260,30 @@ if __name__ == "__main__":
     if ON_GPU:
         # P = mf.user_emb.weight.data.cpu().numpy()
         # Q = mf.item_emb.weight.data.cpu().numpy()
-        P = mf.user_factor(mf.user_emb.weight.data).data.cpu().numpy()
-        Q = mf.item_factor(mf.item_emb.weight.data).data.cpu().numpy()
+        P = np.c_[
+            mf.user_emb.weight.data.cpu().numpy(),
+            mf2.user_emb.weight.data.cpu().numpy()
+        ]
+        Q = np.c_[
+            mf.item_emb.weight.data.cpu().numpy(),
+            mf2.item_emb.weight.data.cpu().numpy()
+        ]
+
+        # P = mf.user_factor(mf.user_emb.weight).data.cpu().numpy()
+        # Q = mf.item_factor(mf.item_emb.weight).data.cpu().numpy()
     else:
         # Q = mf.item_emb.weight.data.numpy()
         # P = mf.user_emb.weight.data.numpy()
-        P = mf.user_factor(mf.user_emb.weight.data).data.numpy()
-        Q = mf.item_factor(mf.item_emb.weight.data).data.numpy()
+        P = np.c_[
+            mf.user_emb.weight.data.numpy(),
+            mf2.user_emb.weight.data.numpy()
+        ]
+        Q = np.c_[
+            mf.item_emb.weight.data.cpu().numpy(),
+            mf2.item_emb.weight.data.cpu().numpy()
+        ]
+        # P = mf.user_factor(mf.user_emb.weight).data.numpy()
+        # Q = mf.item_factor(mf.item_emb.weight).data.numpy()
 
     if sampler.test is not None:
         print('Evaluate!')
@@ -267,5 +320,5 @@ if __name__ == "__main__":
         print('NDCG: {:.4f}'.format(np.mean(ndcg)))
 
     # save!
-    np.save('./data/afeat_spotify_U.npy', P)
-    np.save('./data/afeat_spotify_V.npy', Q)
+    np.save('/mnt/bulk/recsys18/models/mf_w2v_U.npy', P)
+    np.save('/mnt/bulk/recsys18/models/mf_w2v_V.npy', Q)
