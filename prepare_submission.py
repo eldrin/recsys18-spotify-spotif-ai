@@ -15,13 +15,6 @@ def sigmoid(x):
     """"""
     return 1./(1. + np.exp(-x))
 
-
-def beta_sigmoid(x, beta=2):
-    """"""
-    explogit = np.exp(beta * x)
-    return 2 / (1. + explogit)
-
-
 class BaseMF:
     """"""
     def __init__(self, P, Q, importance=1, logistic=False, name='MF', **kwargs):
@@ -101,7 +94,7 @@ def main(config_path, n_rec=500, batch_size=100):
 
         # get initial prediction (for batch, 1k candidates)
         pids_ = [pid2ix[ix] for ix in pids.values]
-        pred_raw_batch = model.predict_k(pids, k=n_cand)
+        pred_raw_batch = model.predict_k(pids_, k=n_cand)
 
         # quick sanity check
         assert tracks.shape[0] == pred_raw_batch.shape[0]
