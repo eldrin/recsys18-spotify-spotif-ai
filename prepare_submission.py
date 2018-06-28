@@ -10,31 +10,90 @@ from util import read_hash
 from tqdm import trange, tqdm
 import fire
 
-def main(out_fn, pl_fac_fn, tr_fac_fn, pl_hash_fn, tr_hash_fn, challenge_path, n_rec=500, batch_size=100):
+
+def sigmoid(x):
     """"""
+    return 1./(1. + np.exp(-x))
+
+
+def beta_sigmoid(x, beta=2):
+    """"""
+    explogit = np.exp(beta * x)
+    return 2 / (1. + explogit)
+
+
+class BaseMF:
+    """"""
+    def __init__(self, P, Q, importance=1, logistic=False, name='MF', **kwargs):
+        """"""
+        self.P = P
+        self.Q = Q
+        self.logistic = logistic
+        self.a = importance
+        self.name = name
+
+    def predict_score(self, u):
+        """"""
+        score = self.P[u].dot(self.Q.T)
+        return sigmoid(score) if self.logistic else score
+
+
+class MultiMF:
+    """"""
+    def __init__(self, *mfmodels):
+        """"""
+        self.models = list(mfmodels)
+
+    def predict_k(self, pids, k=500):
+        """"""
+        # get scores
+        scores = -np.sum(
+            [mf.a * mf.predict_score(pids) for mf in self.models], axis=0
+        )
+        ix = np.argpartition(scores, k, axis=1)[:, :k]
+        pred_raw_ix = scores[np.arange(ix.shape[0])[:,None], ix].argsort(1)
+        pred_raw_batch = ix[np.arange(ix.shape[0])[:,None], pred_raw_ix]
+        return pred_raw_batch
+
+
+def main(config_path, n_rec=500, batch_size=100):
+    """"""
+    # load configuration file
+    config = json.load(open(config_path))
+    model_paths = config['path']['models']
+    data_paths = config['path']['data']
+    out_fn = config['path']['output']
+
     # load hashes (fac_id >> org_id)
-    pl_hash = {int(k): v for k, v in read_hash(pl_hash_fn)[[3, 2]].values}
-    tr_hash = {int(k): v for k, v in read_hash(tr_hash_fn)[[3, 2]].values}
+    pl_hash = {int(k): v for k, v in read_hash(data_paths['playlists'])[[3, 2]].values}
+    tr_hash = {int(k): v for k, v in read_hash(data_paths['tracks'])[[3, 2]].values}
 
     # get pl inv hash (org_pid >> fac_id)
     pid2ix = {int(v): k for k, v in pl_hash.iteritems()}
 
-    # load the factors
-    U = np.load(pl_fac_fn)
-    V = np.load(tr_fac_fn)
+    # setup model
+    models = [
+        BaseMF(
+            np.load(args['P']), np.load(args['Q']),
+            importance=args['importance'],
+            logistic=args['logistic']
+        )
+        for name, args in model_paths.iteritems()
+        if args['name'] != 'na'
+    ]
+    model = MultiMF(*models)
 
     # get candidates
     queries = pd.DataFrame(
-        json.load(open(challenge_path))['playlists']
+        json.load(open(data_paths['challenge_set']))['playlists']
     )
 
     # predict!
     sanity = {}
     predictions = {}
     query_tracks = {}
-    n_cand = int(n_rec * 1.5)
+    n_cand = int(n_rec * 1.2)
     for ix in trange(0, queries.shape[0], batch_size, ncols=80):
-    # for ix in trange(2000, 3000, batch_size, ncols=80):
         qry_slc = queries.iloc[slice(ix, ix+batch_size)]
         pids = qry_slc['pid']
         names = qry_slc['name']
@@ -42,10 +101,7 @@ def main(out_fn, pl_fac_fn, tr_fac_fn, pl_hash_fn, tr_hash_fn, challenge_path, n
 
         # get initial prediction (for batch, 1k candidates)
         pids_ = [pid2ix[ix] for ix in pids.values]
-        r = -U[pids_].dot(V.T)
-        ix = np.argpartition(r, n_cand, axis=1)[:, :n_cand]
-        pred_raw_ix = r[np.arange(ix.shape[0])[:,None], ix].argsort(1)
-        pred_raw_batch = ix[np.arange(ix.shape[0])[:,None], pred_raw_ix]
+        pred_raw_batch = model.predict_k(pids, k=n_cand)
 
         # quick sanity check
         assert tracks.shape[0] == pred_raw_batch.shape[0]

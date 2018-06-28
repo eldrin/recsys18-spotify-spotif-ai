@@ -1,4 +1,5 @@
 from itertools import chain
+from functools import partial
 from scipy import sparse as sp
 import pandas as pd
 import numpy as np
@@ -67,3 +68,16 @@ class MultipleOptimizer:
     def step(self):
         for op in self.optimizers:
             op.step()
+
+
+def beta_sigmoid(x, beta=2):
+    """"""
+    explogit = np.exp(beta * x)
+    return 2 / (1. + explogit)
+
+
+def blend_beta_sigmoid(y, U1, U2, b):
+    """"""
+    _b_sigm = partial(beta_sigmoid, beta=b)
+    g = y.groupby('playlist')['value'].sum().apply(_b_sigm).values[:, None]
+    return ((1-g) * U1 + g * U2).astype(np.float32)
