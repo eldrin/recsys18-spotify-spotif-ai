@@ -222,19 +222,20 @@ class TSVD:
 
 
 class ImplicitALS:
-    def __init__(self, n_components, regularization=1e-3):
+    def __init__(self, n_components, regularization=1e-3, gamma=200):
         self.model = implicit.als.AlternatingLeastSquares(
             factors=n_components, regularization=regularization,
             use_gpu=False, iterations=15, dtype=np.float32
         )
-        # self.model = implicit.bpr.BayesianPersonalizedRanking(
-        #     factors=n_components, regularization=regularization)
+	self.gamma = gamma
 
     def fit(self, X):
-        X.data = X.data * 80
+	os.environ['OPENBLAS_NUM_THREADS'] = '1'
+        X.data = X.data * self.gamma
         self.model.fit(X.T)
         self.U = self.model.user_factors
         self.V = self.model.item_factors
+	os.environ['OPENBLAS_NUM_THREADS'] = '8'
 
     def predict_k(self, u, k=500):
         """"""
