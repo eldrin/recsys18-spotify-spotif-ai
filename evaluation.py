@@ -11,6 +11,7 @@ import fire
 import sys
 sys.path.append(os.path.join(os.getcwd(), 'RecsysChallengeTools'))
 from metrics import ndcg, r_precision, playlist_extender_clicks
+from util import sigmoid, BaseMF, MultiMF
 
 # GLOBAL SETTINGS
 CUTOFF = 500
@@ -45,7 +46,7 @@ def evaluate(model, y, yt, cutoff=CUTOFF):
             true_tr = y_tracks.loc[pid]
         else:
             true_tr = set()
-        pred = model.predict_k(pid, k=cutoff * 2)
+        pred = model.predict_k(pid, k=cutoff * 2).ravel()
 
         # exclude training data
         pred = filter(lambda x: x not in true_tr, pred)[:cutoff]
@@ -60,7 +61,7 @@ def evaluate(model, y, yt, cutoff=CUTOFF):
 
 def evaluate_mf(
     user_factor_fn, item_factor_fn, train_fn, test_fn, cutoff=CUTOFF,
-    mode='all'):
+    mode='all', **kwargs):
     """
     Args:
 
@@ -69,24 +70,25 @@ def evaluate_mf(
         train_fn (str) : path to train data
         test_fn (str) : path to test data
         cutoff (int) : cutoff for calcultate top-k metrics (default : 500)
-        mode (str) : evaluation mode {'all', 'no_seed'}
-            'all': evaluate the mf model for all test case
+        mode (str) : evaluation mode {'all', 'no_seed', 'only_seed'}
+            'all': evaluate the mf model for all test case (default)
             'no_seed': evaluate the mf model only for the **no-seed** test cases
+            'only_seed': evaluate the mf model only for the **seed** test cases
+        **kwargs : mf arguments (i.e. importance, logistic...)
     """
     print('Load data...')
     y = pd.read_csv(train_fn, header=None, names=['playlist', 'track', 'value'])
     yt = pd.read_csv(test_fn, header=None, names=['playlist', 'track', 'value'])
 
-    if mode=='no_seed':
+    if mode == 'no_seed':
         yt = yt[yt['playlist'].isin(set(y[y['value']==0]['playlist'].unique()))]
+    elif mode == 'only_seed':
+        yt = yt[~yt['playlist'].isin(set(y[y['value']==0]['playlist'].unique()))]
 
     print('Load factors and initiate model...')
-    P = np.load(user_factor_fn)
-    Q = np.load(item_factor_fn)
-
-    model = ImplicitALS(Q.shape[-1])
-    model.U = P
-    model.V = Q
+    # setup model
+    mf = BaseMF(np.load(user_factor_fn), np.load(item_factor_fn), **kwargs)
+    model = MultiMF(mf)
 
     print('Evaluate...')
     res, (trues, preds) = evaluate(model, y, yt, cutoff=CUTOFF)

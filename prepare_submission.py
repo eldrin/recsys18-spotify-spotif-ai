@@ -5,48 +5,10 @@ import json
 import pandas as pd
 import numpy as np
 
-from util import read_hash
+from util import read_hash, sigmoid, BaseMF, MultiMF
 
 from tqdm import trange, tqdm
 import fire
-
-
-def sigmoid(x):
-    """"""
-    return 1./(1. + np.exp(-x))
-
-class BaseMF:
-    """"""
-    def __init__(self, P, Q, importance=1, logistic=False, name='MF', **kwargs):
-        """"""
-        self.P = P
-        self.Q = Q
-        self.logistic = logistic
-        self.a = importance
-        self.name = name
-
-    def predict_score(self, u):
-        """"""
-        score = self.P[u].dot(self.Q.T)
-        return sigmoid(score) if self.logistic else score
-
-
-class MultiMF:
-    """"""
-    def __init__(self, *mfmodels):
-        """"""
-        self.models = list(mfmodels)
-
-    def predict_k(self, pids, k=500):
-        """"""
-        # get scores
-        scores = -np.sum(
-            [mf.a * mf.predict_score(pids) for mf in self.models], axis=0
-        )
-        ix = np.argpartition(scores, k, axis=1)[:, :k]
-        pred_raw_ix = scores[np.arange(ix.shape[0])[:,None], ix].argsort(1)
-        pred_raw_batch = ix[np.arange(ix.shape[0])[:,None], pred_raw_ix]
-        return pred_raw_batch
 
 
 def main(config_path, n_rec=500, batch_size=100):
