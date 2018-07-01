@@ -28,6 +28,7 @@ def numpy2torchvar(ndarray, dtype='float', gpu=True):
 def read_data(fn, delimiter=',', f_cast=int, shape=None):
     """"""
     ll = pd.read_csv(fn, sep=delimiter, header=None, index_col=None)
+    # build sparse matrix excluding zero entries
     i = ll[0]
     j = ll[1]
 
@@ -42,6 +43,7 @@ def read_data(fn, delimiter=',', f_cast=int, shape=None):
         shape = (max(i) + 1, max(j) + 1)
 
     D = sp.coo_matrix((v, (i, j)), shape=shape).tocsr()
+    D.eliminate_zeros()
     return D, ll
 
 
