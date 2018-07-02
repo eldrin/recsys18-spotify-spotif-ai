@@ -59,19 +59,6 @@ def sparse2triplet(S):
     return np.array(sp.find(S)).T
 
 
-class MultipleOptimizer:
-    def __init__(self, *op):
-        self.optimizers = op
-
-    def zero_grad(self):
-        for op in self.optimizers:
-            op.zero_grad()
-
-    def step(self):
-        for op in self.optimizers:
-            op.step()
-
-
 def beta_sigmoid(x, beta=2):
     """"""
     explogit = np.exp(beta * x)

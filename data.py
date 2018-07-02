@@ -9,6 +9,8 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import QuantileTransformer
 
+import torch
+
 from util import read_data, read_hash
 
 from tqdm import tqdm
@@ -24,6 +26,24 @@ FEATURE_COLS = [
 
 class DataPrepper:
     """"""
+    def __init__(self, raw=True, subset=True, fullset=True):
+        """ Preprocess given data to playlist-track-interaction lists
+
+        Args:
+            raw (bool): flag that indicates if raw data is processed
+            subset (bool): flag that indicates if subset is genearted
+            fullset (bool): flag that indicates if fullset is processed
+
+        """
+        self._scope = []
+        self._is_raw = raw
+
+        if subset:
+            self._scope.append('subset')
+
+        if fullset:
+            self._scope.append('full')
+
     def process(self, data_root, out_root, challengeset_fn,
                 n_train=50000, n_test=500):
         """ Prepare learning data for the project
@@ -37,37 +57,44 @@ class DataPrepper:
         """
         # load setup
         processed_dir = data_root
-        subset_dir = join(data_root, "subset")
-        fullset_dir = join(data_root, "full")
+        # render sub-paths
+        subdirs = {}
+        for k in self._scope:
+            subdirs[k] = join(out_root, k)
+            if not os.path.exists(subdirs[k]):
+                os.makedirs(subdirs[k])
 
-        print('>>> Processing Raw Data!...')
-        self._process_raw_data(data_root, out_root)
+        if self._is_raw:
+            # firing off the data prep process
+            print('>>> Processing Raw Data!...')
+            self._process_raw_data(data_root, out_root)
 
-        print('>>> Processing Challenge Set!...')
-        self._process_challenge_data(
-            out_root, challengeset_fn,
-            join(out_root, 'uniq_tracks.csv'))
+            print('>>> Processing Challenge Set!...')
+            self._process_challenge_data(
+                out_root, challengeset_fn,
+                join(out_root, 'uniq_tracks.csv'))
 
-        print('>>> Preparing Fullset!...')
-        self._get_full(
-            join(out_root, 'playlist_tracks.csv'),
-            join(out_root, 'uniq_playlists.csv'),
-            join(out_root, 'uniq_tracks.csv'),
-            join(out_root, 'uniq_artists.csv'),
-            join(out_root, dirname(challengeset_fn),
-                 basename(challengeset_fn).split('.json')[0] + '.csv'),
-            out_root,
-        )
+        if 'full' in self._scope:
+            print('>>> Preparing Fullset!...')
+            self._get_full(
+                join(out_root, 'playlist_tracks.csv'),
+                join(out_root, 'uniq_playlists.csv'),
+                join(out_root, 'uniq_tracks.csv'),
+                join(out_root, 'uniq_artists.csv'),
+                join(out_root, dirname(challengeset_fn),
+                     basename(challengeset_fn).split('.json')[0] + '.csv'),
+                subdirs['full'],
+            )
 
-        print('>>> Preparing Subset!...')
-        self._get_subset(
-            join(out_root, 'playlist_tracks.csv'),
-            join(out_root, 'uniq_playlists.csv'),
-            join(out_root, 'uniq_tracks.csv'),
-            join(out_root, 'uniq_artists.csv'),
-            out_root, n_train, n_test
-        )
-
+        if 'subset' in self._scope:
+            print('>>> Preparing Subset!...')
+            self._get_subset(
+                join(out_root, 'playlist_tracks.csv'),
+                join(out_root, 'uniq_playlists.csv'),
+                join(out_root, 'uniq_tracks.csv'),
+                join(out_root, 'uniq_artists.csv'),
+                subdirs['subset'], n_train, n_test
+            )
 
     def _process_raw_data(self, data_root, out_path=None,
                           out_fn='playlist_tracks.csv',
@@ -129,11 +156,10 @@ class DataPrepper:
         # dump to file
         pd.DataFrame(res).to_csv(fn, index=None, sep='\t', encoding='utf-8')
 
-
     def _get_subset(self, playlist_track_fn, uniq_playlist_fn,
                    track_hash_fn, artist_hash_fn,
                    out_path, n_train=50000, n_test=500):
-        """"""
+        """ get simulated subset out of the mpd training set """
         _subsample_dataset(
             r_fn=playlist_track_fn,
             uniq_playlist_fn=uniq_playlist_fn,
@@ -146,7 +172,7 @@ class DataPrepper:
     def _get_full(self, playlist_track_fn, uniq_playlist_fn,
                   track_hash_fn, artist_hash_fn, challengeset_fn,
                   out_path):
-        """"""
+        """ get full dataset including challenge seeds as training set """
         _prepare_full_data(
             out_path=out_path,
             r_fn=playlist_track_fn,
@@ -752,6 +778,144 @@ def _prepare_full_data(out_path, r_fn, t_fn, uniq_playlist_fn,
                 f.write("{:d}\t{}\t{}\t{}\n".format(int(k), v[0], v[1], v[2]))
 
 
+def _load_embeddings(config):
+    """"""
+    embs = {
+        k: np.load(fn) for k, fn
+        in config['path']['embeddings'].iteritems()
+    }
+    return embs
+
+
+def _load_data(config):
+    """ returns main tuples and track-artist map """
+    dat = {
+        k: pd.read_csv(fn, header=None) for k, fn
+        in config['path']['data'].iteritems()
+        if k not in {'playlists', 'tracks', 'artists'}
+    }
+    # dat['main'].columns = ['playlist', 'track']
+    dat['train'].columns = ['playlist', 'track', 'value']  # set columns name
+    # dat['train'] = dat['train'][dat['train']['value'] == 1]
+
+    if 'test' in dat:
+        dat['test'].columns = ['playlist', 'track', 'value']
+        return (
+            None, dat['train'], dat['test'],
+            dict(dat['artist2track'][[1, 0]].values)
+        )
+    else:
+        return (
+            None, dat['train'], None,
+            dict(dat['artist2track'][[1, 0]].values)
+        )
+
+
+class MPDSampler:
+    """"""
+    def __init__(self, config, verbose=False):
+        """"""
+        _, self.train, self.test, self.track2artist = _load_data(config)
+        self.triplet = self.train
+
+        self.n_playlists = self.triplet['playlist'].nunique()
+        self.triplet = self.triplet[self.triplet['value'] == 1]
+        if self.test is None:
+            self.items = self.triplet['track'].unique()
+        else:
+            self.items = list(np.unique(
+                np.concatenate([self.triplet['track'].unique(),
+                                self.test['track'].unique()])))
+        self.n_tracks = len(self.items)
+        self.num_interactions = self.triplet.shape[0]
+        self.batch_size = config['hyper_parameters']['batch_size']
+        self.is_weight = config['hyper_parameters']['sample_weight']
+        self.weight_pow = config['hyper_parameters']['sample_weight_power']
+        self.threshold = config['hyper_parameters']['sample_threshold']
+        self.with_context = config['hyper_parameters']['with_context']
+        self.context_size = [1, 5, 25, 50, 100]
+        self.context_shuffle = [False, True]
+        self.w0 = 10  # positive weight
+        self.c0 = 1  # negative initial weight
+
+        # prepare positive sample pools
+        self.pos_tracks = dict(self.triplet.groupby('playlist')['track'].apply(set))
+
+        if self.test is not None:
+            self.pos_tracks_t = dict(self.test.groupby('playlist')['track'].apply(set))
+
+        if self.is_weight:
+            # check word (track) frequency
+            track_count = self.triplet.groupby('track').count()['playlist']
+            f_w_dict = track_count.to_dict()
+            f_w = [f_w_dict[t] if t in f_w_dict else 0 for t in self.items]
+
+            # Sub-sampling
+            f_w_a = np.array(f_w)**.5
+            c = f_w_a / f_w_a.sum() * self.c0
+            self.items_dict = dict(enumerate(self.items))
+            self.weight = dict(zip(self.items, c))
+            self.pos_weight = self.w0
+
+        else:
+            # self.items = self.triplet['track'].unique()
+            self.items_dict = dict(enumerate(self.items))
+            self.weight = dict(zip(self.items, [1] * len(self.items)))
+            self.pos_weight = self.w0
+
+        self.neg = config['hyper_parameters']['neg_sample']
+        self.verbose = verbose
+
+    # @background(max_prefetch=100)
+    def generator(self):
+        """"""
+        if self.verbose:
+            M = tqdm(self.triplet.sample(frac=1).values, ncols=80)
+        else:
+            M = self.triplet.sample(frac=1).values
+
+        batch, neg, conf = [], [], []
+        for u, i, v in M:
+
+            if v == 0:
+                continue
+
+            # positive sample / yield
+            pos_i = self.pos_tracks[u]
+            conf.append(self.pos_weight)
+
+            # add context
+            if self.with_context:
+                context = pos_i - set([i])
+                if len(context) > 0:
+                    N = filter(lambda x: x <= len(context), self.context_size)
+                    context = np.random.choice(
+                        list(context), np.random.choice(N), replace=False)
+                else:  # randomly pick popular songs...
+                    context = np.random.choice(100000, 5, False)
+            else:
+                context = 0
+
+            # draw negative samples (for-loop)
+            for k in xrange(self.neg):
+                j_ = self.items_dict[np.random.choice(self.n_tracks)]
+                while j_ in pos_i:
+                    j_ = self.items_dict[np.random.choice(self.n_tracks)]
+                # negtive sample has 0 interaction (conf==1)
+                neg.append(j_)
+                conf.append(self.weight[j_])
+
+            # prepare batch containor
+            batch.append((u, i, neg, context, conf))
+            neg, context, conf = [], [], []
+
+            # batch.append(batch_)
+            if len(batch) >= self.batch_size:
+                yield batch
+                # reset containors
+                batch = []
+
+
 def get_ngram(word, n=3):
     """"""
     w = '#' + str(word) + '#'
@@ -763,6 +927,45 @@ def get_unique_ngrams(words, n=3, stopper='#'):
     ngrams = map(partial(get_ngram, n=n), words)
     uniq_ngrams = list(set(chain.from_iterable(ngrams)))  # flatten
     return uniq_ngrams
+
+
+def transform_id2ngram_id(ids, title_dict, ngram_dict, n=3):
+    """
+    transform a index (either playlist or track)
+    into sequence of ngram_id
+    """
+    out = []
+    for i in ids:
+        out.append(
+            [ngram_dict[w] for w in get_ngram(title_dict[i], n=n)]
+        )
+    return out
+
+
+class SeqTensor:
+    def __init__(self, seq, title_dict=None, ngram_dict=None):
+        """"""
+        # process seq
+        if title_dict is None and ngram_dict is None:
+            seq_ngram = seq
+        else:  # process on-the-go
+            seq_ngram = transform_id2ngram_id(seq, title_dict, ngram_dict)
+        lengths = map(len, seq_ngram)
+        max_len = max(lengths)
+        lengths = torch.cuda.LongTensor(lengths)
+        X_pl = torch.cuda.LongTensor(
+            [a + [0] * (max_len - len(a)) for a in seq_ngram])
+        length_sorted, ind = lengths.sort(descending=True)
+        _, self.unsort_ind = ind.sort()
+
+        # assign properties
+        self.seq = X_pl[ind]
+        self.lengths = length_sorted
+        self.ind = ind
+
+    def unsort(self, h):
+        """"""
+        return h[self.unsort_ind]
 
 
 if __name__ == "__main__":
