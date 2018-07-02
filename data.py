@@ -794,7 +794,6 @@ def _load_data(config):
         in config['path']['data'].iteritems()
         if k not in {'playlists', 'tracks', 'artists'}
     }
-    # dat['main'].columns = ['playlist', 'track']
     dat['train'].columns = ['playlist', 'track', 'value']  # set columns name
     # dat['train'] = dat['train'][dat['train']['value'] == 1]
 
@@ -943,7 +942,7 @@ def transform_id2ngram_id(ids, title_dict, ngram_dict, n=3):
 
 
 class SeqTensor:
-    def __init__(self, seq, title_dict=None, ngram_dict=None):
+    def __init__(self, seq, title_dict=None, ngram_dict=None, is_gpu=False):
         """"""
         # process seq
         if title_dict is None and ngram_dict is None:
@@ -952,9 +951,14 @@ class SeqTensor:
             seq_ngram = transform_id2ngram_id(seq, title_dict, ngram_dict)
         lengths = map(len, seq_ngram)
         max_len = max(lengths)
-        lengths = torch.cuda.LongTensor(lengths)
-        X_pl = torch.cuda.LongTensor(
+        lengths = torch.LongTensor(lengths)
+        X_pl = torch.LongTensor(
             [a + [0] * (max_len - len(a)) for a in seq_ngram])
+
+        if is_gpu:
+            lengths = lengths.cuda()
+            X_pl = X_pl.cuda()
+
         length_sorted, ind = lengths.sort(descending=True)
         _, self.unsort_ind = ind.sort()
 

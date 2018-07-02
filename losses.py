@@ -24,13 +24,13 @@ class SGNSMSE(nn.Module):
         super(SGNSMSE, self).__init__()
         self.sgns = SGNS()
         self.mse = nn.MSELoss()
-        self.lmbda = coeff
+        self.lmbda = lmbda
 
     def forward(self, h, v, q, targ, weight=None):
         """"""
         hv = torch.bmm(v, h.view(h.shape[0], h.shape[-1], 1)).squeeze()
         return (
-            lmbda * self.sgns(hv, targ, weight) +
-            (1.-lmbda) * self.mse(h, q)
+            self.lmbda * self.sgns(hv, targ, weight) +
+            (1.-self.lmbda) * self.mse(h, q)
         )
 

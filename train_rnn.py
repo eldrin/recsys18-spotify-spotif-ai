@@ -1,142 +1,41 @@
 import os
-import re
 from functools import partial
-from itertools import chain
-from collections import namedtuple
-import cPickle as pkl
-import pandas as pd
+import json
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from sklearn.utils import shuffle
-
-from nltk.tokenize.nist import NISTTokenizer
 
 import torch
 from torch import optim
 from torch import nn
-from torch.nn.utils.rnn import pack_padded_sequence
-import torch.nn.functional as F
 from torch.autograd import Variable
 
-from prefetch_generator import background
-from tqdm import tqdm, trange
-
-# from evaluation import r_precision, NDCG
 import sys
 sys.path.append(os.path.join(os.getcwd(), 'RecsysChallengeTools/'))
 from metrics import ndcg, r_precision, playlist_extender_clicks
 NDCG = partial(ndcg, k=500)
 
-from mfmlp import MPDSampler, NEGCrossEntropyLoss
-from data import get_ngram, get_unique_ngrams
-from pretrain_word2vec import load_n_process_data
-from util import read_hash, MultipleOptimizer
-from nlp_rnn_factor_learn import CONFIG
+from data import MPDSampler
+from data import get_unique_ngrams
+from data import transform_id2ngram_id
+from model import UserRNN
+from losses import SGNS, SGNSMSE
+from optimizers import MultipleOptimizer
+from util import read_hash
 
-try:
-    print(torch.cuda.current_device())
-    floatX = torch.cuda.FloatTensor
-except:
-    floatX = torch.FloatTensor
-
-
-def transform_id2ngram_id(ids, title_dict, ngram_dict, n=3):
-    """
-    transform a index (either playlist or track)
-    into sequence of ngram_id
-    """
-    out = []
-    for i in ids:
-        out.append(
-            [ngram_dict[w] for w in get_ngram(title_dict[i], n=n)]
-        )
-    return out
+from tqdm import tqdm, trange
+import fire
 
 
-class SeqTensor:
-    def __init__(self, seq, title_dict=None, ngram_dict=None):
-        """"""
-        # process seq
-        if title_dict is None and ngram_dict is None:
-            seq_ngram = seq
-        else:  # process on-the-go
-            seq_ngram = transform_id2ngram_id(seq, title_dict, ngram_dict)
-        lengths = map(len, seq_ngram)
-        max_len = max(lengths)
-        lengths = torch.cuda.LongTensor(lengths)
-        X_pl = torch.cuda.LongTensor(
-            [a + [0] * (max_len - len(a)) for a in seq_ngram])
-        length_sorted, ind = lengths.sort(descending=True)
-        _, self.unsort_ind = ind.sort()
-
-        # assign properties
-        self.seq = X_pl[ind]
-        self.lengths = length_sorted
-        self.ind = ind
-
-    def unsort(self, h):
-        """"""
-        return h[self.unsort_ind]
-
-
-class UserRNN(nn.Module):
+def main(config_fn):
     """"""
-    def __init__(self, n_components, n_users, n_hid=100, n_out=16,
-                 user_train=True, n_layers=1, non_lin=nn.ReLU, layer_norm=False,
-                 drop_out=0, learn_metric=True, sparse_embedding=True):
-        """"""
-        super(UserRNN, self).__init__()
-        self.n_components = n_components
-        self.n_users = n_users
-        self.n_layers = n_layers
-        self.non_lin = non_lin
-        self.n_out = n_out
-        self.learn_metric = learn_metric
+    CONFIG = json.load(open(config_fn))
 
-        # setup learnable embedding layers
-        self.emb = nn.Embedding(
-            n_users, n_components, sparse=sparse_embedding)
-        self.emb.weight.requires_grad = user_train
-        self.user_rnn = nn.LSTM(n_components, n_hid, n_layers,
-                                batch_first=True)
-        self.user_out = nn.Linear(n_hid, n_out)
-
-    def forward(self, pid):
-        """
-        pid: SeqTensor instance for batch of playlist
-        """
-        # process seqs
-        pid = SeqTensor(pid, None, None)
-
-        # process rnn
-        emb_pl = self.emb(Variable(pid.seq))
-        emb_pl = pack_padded_sequence(emb_pl, pid.lengths.tolist(), batch_first=True)
-        out_u, hid_u = self.user_rnn(emb_pl)
-
-        # unpack & unsort batch order
-        hid_u = pid.unsort(hid_u[0][-1])  # only take last rnn layer
-
-        # obtain final estimation
-        out_u = self.user_out(hid_u)
-        return out_u
-
-    def user_factor(self, pid):
-        """"""
-        pid = SeqTensor(pid, None, None)
-        emb_pl = self.emb(Variable(pid.seq))
-        emb_pl = pack_padded_sequence(emb_pl, pid.lengths.tolist(), batch_first=True)
-        out_u, hid_u = self.user_rnn(emb_pl)
-
-        out_u = self.user_out(pid.unsort(hid_u[0][-1]))
-        return out_u
-
-
-if __name__ == "__main__":
-    """"""
     # setup some aliases
     HP = CONFIG['hyper_parameters']
+    USE_GPU = CONFIG['hyper_parameters']['use_gpu']
+    EARLY_STOP = HP['early_stop']
 
     # make ngram dicts
     print('Preparing {:d}-Gram dictionary...'.format(HP['ngram_n']))
@@ -163,10 +62,9 @@ if __name__ == "__main__":
         n_components=HP['n_embedding'],
         n_users=len(uniq_ngrams_pl),
         n_hid=HP['n_hid'], n_out=HP['n_out_embedding'],
-        user_train=True, n_layers=1, non_lin=HP['non_lin'],
-        layer_norm=False, drop_out=0, learn_metric=True,
-        sparse_embedding=True
-    ).cuda()
+        user_train=True, n_layers=HP['n_layers'],
+        drop_out=HP['drop_out'], sparse_embedding=True
+    )
     """"""
     track_factors = nn.Embedding(
         sampler.n_tracks, HP['n_out_embedding'], sparse=True)
@@ -175,14 +73,14 @@ if __name__ == "__main__":
     # set loss / optimizer
     if HP['loss'] == 'MSE':
         # f_loss = nn.SmoothL1Loss().cuda()
-        f_loss = nn.MSELoss().cuda()
+        f_loss = nn.MSELoss()
 
         # load target (pre-trained) playlist factors
         playlist_factors = np.load(
             CONFIG['path']['embeddings']['U']).astype(np.float32)
 
     elif HP['loss'] == 'SGNS':
-        f_loss = NEGCrossEntropyLoss().cuda()
+        f_loss = SGNS()
 
         # load target (pre-trained) playlist factors
         """
@@ -200,16 +98,7 @@ if __name__ == "__main__":
             CONFIG['path']['embeddings']['V']).astype(np.float32)
 
         # setup total loss
-        # mse = nn.SmoothL1Loss().cuda()
-        mse = nn.MSELoss().cuda()
-        sgns = NEGCrossEntropyLoss().cuda()
-        def f_loss(h, v, pref, p, conf=None, coeff=0.5):
-            """"""
-            hv = torch.bmm(
-                v, h.view(y_pred.shape[0], y_pred.shape[-1], 1)
-            ).squeeze()
-            return coeff * sgns(hv, pref, conf) + (1.-coeff) * mse(h, p)
-
+        f_loss = SGNSMSE()
 
     sprs_prms = map(
         lambda x: x[1],
@@ -227,8 +116,14 @@ if __name__ == "__main__":
     )
     opt = MultipleOptimizer(
         optim.SparseAdam(sprs_prms, lr=HP['learn_rate']),
-        optim.Adam(dnse_prms, lr=HP['learn_rate'], amsgrad=True)
+        # optim.Adam(dnse_prms, lr=HP['learn_rate'], amsgrad=True)  # <= 0.4.0 pytorch
+        optim.Adam(dnse_prms, lr=HP['learn_rate'])  # > 0.4.0 pytorch
     )
+
+    if USE_GPU:
+        model = model.cuda()
+        f_loss = f_loss.cuda()
+        SeqTensor = partial(SeqTensor, is_gpu=USE_GPU)
 
     # main training loop
     model.train()
@@ -236,13 +131,20 @@ if __name__ == "__main__":
     try:
         epoch = trange(HP['num_epochs'], ncols=80)
         for n in epoch:
+            k = 0
             for batch in sampler.generator():
+                k += 1
+                # arbitrary early stop used for fast training
+                # NOTE: only works with 'all' loss
+                if EARLY_STOP:
+                    if k > 20000:
+                        break
 
                 # parse in / out
                 pid_ = [x[0] for x in batch]  # (n_batch,)
                 pid = [playlist_dict[i] for i in pid_]
                 conf_ = [x[-1] for x in batch]
-                conf = Variable(torch.FloatTensor(conf_).cuda())
+                conf = Variable(torch.FloatTensor(conf_))
 
                 # flush grad
                 opt.zero_grad()
@@ -252,29 +154,37 @@ if __name__ == "__main__":
 
                 if HP['loss'] == 'MSE':
                     y_true = Variable(
-                        torch.from_numpy(playlist_factors[pid_]).cuda()
+                        torch.from_numpy(playlist_factors[pid_])
                     )
+                    if USE_GPU:
+                        y_true = y_true.cuda()
+
                     # calc loss
                     l = f_loss(y_pred, y_true)
 
                 elif HP['loss'] == 'SGNS':
                     tid_ = [[x[1]] + x[2] for x in batch]
                     pref_ = [[1.] + [-1.] * len(x[2]) for x in batch]
-                    pref = Variable(torch.FloatTensor(pref_).cuda())
+                    pref = Variable(torch.FloatTensor(pref_))
 
                     # calc loss
                     """
                     v = Variable(
                         torch.from_numpy(
                             np.array([track_factors[t] for t in tid_])
-                        ).cuda()
+                        )
                     )
                     """
                     """"""
                     v = track_factors(
                         Variable(torch.LongTensor(tid_))
-                    ).cuda()
+                    )
                     """"""
+
+                    if USE_GPU:
+                        pref = pref.cuda()
+                        v = v.cuda()
+
                     hv = torch.bmm(
                         v, y_pred.view(y_pred.shape[0], y_pred.shape[-1], 1)
                     ).squeeze()
@@ -285,18 +195,21 @@ if __name__ == "__main__":
                 elif HP['loss'] == 'all':
                     tid_ = [[x[1]] + x[2] for x in batch]
                     pref_ = [[1.] + [-1.] * len(x[2]) for x in batch]
-                    pref = Variable(torch.FloatTensor(pref_).cuda())
-                    y_true = Variable(
-                        torch.from_numpy(playlist_factors[pid_]).cuda()
-                    )
+                    pref = Variable(torch.FloatTensor(pref_))
+                    y_true = Variable(torch.from_numpy(playlist_factors[pid_]))
                     v = Variable(
                         torch.from_numpy(
                             np.array([track_factors[t] for t in tid_])
-                        ).cuda()
+                        )
                     )
 
+                    if USE_GPU:
+                        pref = pref.cuda()
+                        y_true = y_true.cuda()
+                        v = v.cuda()
+
                     # calc loss
-                    l = f_loss(y_pred, v, pref, y_true)
+                    l = f_loss(y_pred, v, y_true, pref)
 
                 # back-propagation
                 l.backward()
@@ -342,7 +255,11 @@ if __name__ == "__main__":
         if j > n:
             continue
         pid_ = [playlist_dict[jj] for jj in pid[j:j+b]]
-        P.append(model.user_factor(pid_).data.cpu().numpy())
+        if USE_GPU:
+            P.append(model.user_factor(pid_).data.cpu().numpy())
+        else:
+            P.append(model.user_factor(pid_).data.numpy())
+
     P = np.concatenate(P, axis=0).astype(np.float32)
     np.save(CONFIG['path']['model_out']['U'], P)
     del P
@@ -386,3 +303,16 @@ if __name__ == "__main__":
     # 3) print out the loss evolution as a image
     plt.plot(losses)
     plt.savefig('./data/losses.png')
+
+    # 4) dump the rnn model / ngram dict
+    checkpoint = {
+        'epoch': n, 'updates': k,
+        'state_dict': model.state_dict(),
+        'optimizer': opt.state_dict(),
+        'uniq_ngram': uniq_ngrams_pl
+    }
+    torch.save(checkpoint, CONFIG['path']['model_out']['rnn'])
+
+
+if __name__ == "__main__":
+    fire.Fire(main)

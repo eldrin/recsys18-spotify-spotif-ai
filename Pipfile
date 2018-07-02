@@ -7,6 +7,7 @@ name = "pypi"
 
 [packages]
 torchvision = "*"
+torch = "*"
 ipython = "==5.7.0"
 scipy = "*"
 matplotlib = "*"
@@ -17,10 +18,7 @@ fire = "*"
 sklearn = "*"
 nltk = "*"
 gensim = "*"
-"3b023d5" = {file = "http://download.pytorch.org/whl/cu80/torch-0.3.1-cp27-cp27mu-linux_x86_64.whl"}
-"7fdd3bd" = {file = "http://download.pytorch.org/whl/cu80/torch-0.3.0.post4-cp27-cp27mu-linux_x86_64.whl"}
 implicit = "*"
-# "34a454a" = {file = "http://download.pytorch.org/whl/cu80/torch-0.3.0-cp27-cp27mu-linux_x86_64.whl"}
 
 [requires]
 python_version = "2.7"

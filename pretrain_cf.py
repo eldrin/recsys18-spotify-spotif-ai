@@ -3,13 +3,13 @@ from os.path import isfile
 import numpy as np
 
 from util import read_data
-from cf import ImplicitALS
+from model import ImplicitALS
 from evaluation import evaluate
 
 import fire
 
 
-def main(train_fn, test_fn=None, r=10, alpha=100, n_epoch=15, beta=10,
+def main(train_fn, test_fn=None, r=10, alpha=100, n_epoch=15, beta=1e-3,
          cutoff=500, model_out_root=None, model_name='wrmf'):
     """"""
     print('Loading data...')
@@ -26,18 +26,22 @@ def main(train_fn, test_fn=None, r=10, alpha=100, n_epoch=15, beta=10,
         res, (trues, preds) = evaluate(model, y, yt, cutoff)
         print(res)
 
-    print('Save Model...')
-    if model_out_root is None:
-        model_out_root = os.path.join(os.getcwd(), 'data')
+    if model_out_root is not None:
+        if not os.path.exists(model_out_root):
+            os.makedirs(model_out_root)
 
-    np.save(
-        os.path.join(model_out_root, '{}_U.npy'.format(model_name)),
-        model.item_factors
-    )
-    np.save(
-        os.path.join(model_out_root, '{}_V.npy'.format(model_name)),
-        model.user_factors.astype(np.float32)
-    )
+        print('Save Model...')
+        if model_out_root is None:
+            model_out_root = os.path.join(os.getcwd(), 'data')
+
+        np.save(
+            os.path.join(model_out_root, '{}_U.npy'.format(model_name)),
+            model.user_factors
+        )
+        np.save(
+            os.path.join(model_out_root, '{}_V.npy'.format(model_name)),
+            model.item_factors
+        )
 
 
 if __name__ == "__main__":

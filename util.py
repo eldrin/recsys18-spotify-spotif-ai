@@ -115,3 +115,9 @@ class MultiMF:
 
         return pred_raw_batch
 
+
+def load_checkpoint(model, checkpoint_fn):
+    """"""
+    checkpoint = torch.load(checkoint_fn)
+    model.eval()
+    model.load_state_dict(checkpoint['sate_dict'])
