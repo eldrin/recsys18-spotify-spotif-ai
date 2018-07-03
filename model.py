@@ -50,6 +50,7 @@ class UserRNN(nn.Module):
         self.n_users = n_users
         self.n_layers = n_layers
         self.n_out = n_out
+        self.is_cuda = False
 
         # setup learnable embedding layers
         self.emb = nn.Embedding(
@@ -64,7 +65,7 @@ class UserRNN(nn.Module):
         pid: SeqTensor instance for batch of playlist
         """
         # process seqs
-        pid = SeqTensor(pid, None, None)
+        pid = SeqTensor(pid, None, None, is_gpu=self.is_cuda)
 
         # process rnn
         emb_pl = self.emb(Variable(pid.seq))
@@ -80,7 +81,7 @@ class UserRNN(nn.Module):
 
     def user_factor(self, pid):
         """"""
-        pid = SeqTensor(pid, None, None)
+        pid = SeqTensor(pid, None, None, is_gpu=self.is_cuda)
         emb_pl = self.emb(Variable(pid.seq))
         emb_pl = pack_padded_sequence(emb_pl, pid.lengths.tolist(), batch_first=True)
         out_u, hid_u = self.user_rnn(emb_pl)

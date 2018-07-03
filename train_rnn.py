@@ -28,6 +28,9 @@ from tqdm import tqdm, trange
 import fire
 
 
+EARLY_STOP_K = 20000
+
+
 def main(config_fn):
     """"""
     CONFIG = json.load(open(config_fn))
@@ -122,8 +125,8 @@ def main(config_fn):
 
     if USE_GPU:
         model = model.cuda()
+        model.is_cuda = True
         f_loss = f_loss.cuda()
-        SeqTensor = partial(SeqTensor, is_gpu=USE_GPU)
 
     # main training loop
     model.train()
@@ -137,7 +140,7 @@ def main(config_fn):
                 # arbitrary early stop used for fast training
                 # NOTE: only works with 'all' loss
                 if EARLY_STOP:
-                    if k > 20000:
+                    if k > EARLY_STOP_K:
                         break
 
                 # parse in / out

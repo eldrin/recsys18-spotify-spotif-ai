@@ -1,5 +1,8 @@
 import os
 from os.path import join
+import sys
+sys.path.append(join(os.getcwd(), 'RecsysChallengeTools'))
+import subprocess
 
 import json
 import tempfile
@@ -10,11 +13,22 @@ from train_rnn import main as train_rnn
 from post_process import main as post_process
 from prepare_submission import main as prepare_submission
 
+from verify_submission import verify_submission
+
 import fire
 
+MF_MODEL_NAME = 'wrmf{:d}'
+RNN_MODEL_NAME = 'titlernn{:d}'
+MFRNN_PLAYLIST_MODEL_NAME = 'mf_rnn{:d}'
 
-def main(data_root, challengeset_fn, out_root, n_factors=10):
+
+def main(data_root, challengeset_fn, out_root, n_factors=10, use_gpu=False):
     """"""
+    # setup model names
+    mf_name = MF_MODEL_NAME.format(n_factors)
+    rnn_name = RNN_MODEL_NAME.format(n_factors)
+    mfrnn_pl_name = MFRNN_PLAYLIST_MODEL_NAME.format(n_factors)
+
     print('>>> 1. Processing dataset!...')
     # only process fullset (we don't need subset now)
     data = (DataPrepper(subset=False)
@@ -23,33 +37,34 @@ def main(data_root, challengeset_fn, out_root, n_factors=10):
     print('>>> 2. Pre-training MF (WRMF) model!...')
     pretrain_cf(
         train_fn=join(out_root, "full", "playlist_track_train.csv"),
-        r=n_factors, model_out_root=out_root, model_name='wrmf'
+        r=n_factors, model_out_root=out_root,
+        model_name=mf_name
     )
 
-    print('>>> 3. Training RNN (Char-Ngram-LSTM) model!...')
+    # print('>>> 3. Training RNN (Char-Ngram-LSTM) model!...')
     # > build tmp config
     rnn_conf = {
         'path':{
             'embeddings':{
-                'U': join(out_root, 'wrmf_U.npy'),
-                'V': join(out_root, 'wrmf_V.npy')
+                'U': join(out_root, '{}_U.npy'.format(mf_name)),
+                'V': join(out_root, '{}_V.npy'.format(mf_name))
             },
             'data':{
-                'playlists': join(out_root, 'playlist_hash.csv'),
-                'tracks': join(out_root, 'track_hash.csv'),
-                'artists': join(out_root, 'artist_hash.csv'),
-                'train': join(out_root, 'playlist_track_train.csv'),
-                'artist2track': join(out_root, 'artist_track.csv')
+                'playlists': join(out_root, 'full', 'playlist_hash.csv'),
+                'tracks': join(out_root, 'full', 'track_hash.csv'),
+                'artists': join(out_root, 'full', 'artist_hash.csv'),
+                'train': join(out_root, 'full', 'playlist_track_train.csv'),
+                'artist2track': join(out_root, 'full', 'artist_track.csv')
             },
             'model_out':{
-                'U': join(out_root, 'titlernn{:d}_U.npy'.format(n_factors)),
-                'V': join(out_root, 'titlernn{:d}_V.npy'.format(n_factors)),
+                'U': join(out_root, '{}_U.npy'.format(rnn_name)),
+                'V': join(out_root, '{}_V.npy'.format(rnn_name)),
                 "rnn": join(out_root, "rnn_checkpoint.pth.tar")
             }
         },
         'hyper_parameters':{
             "early_stop": True,
-            "use_gpu": False,
+            "use_gpu": use_gpu,
             "eval_while_fit": True,
             "sample_weight": False,
             "sample_weight_power": 0.75,
@@ -79,8 +94,8 @@ def main(data_root, challengeset_fn, out_root, n_factors=10):
     print('>>> 4. Combining MF-RNN playlist factors!...')
     post_process(
         rnn_conf['path']['embeddings']['U'],
-        rnn_conf['model_out']['U'],
-        join(out_root, 'mf_rnn_U.npy'),
+        rnn_conf['path']['model_out']['U'],
+        join(out_root, '{}_U.npy'.format(mfrnn_pl_name)),
         rnn_conf['path']['data']['train']
     )
 
@@ -91,16 +106,16 @@ def main(data_root, challengeset_fn, out_root, n_factors=10):
             'models':{
                 'als_rnn':{
                     'name':'main',
-                    'P': join(out_root, 'mf_rnn_U.npy'),
+                    'P': join(out_root, '{}_U.npy'.format(mfrnn_pl_name)),
                     'Q': join(out_root, rnn_conf['path']['embeddings']['V']),
                     'importance':1,
                     'logistic': False
                 }
             },
             'data':{
-                'playlists': join(out_root,'playlist_hash.csv'),
-                'tracks': join(out_root, 'track_hash.csv'),
-                'train': join(out_root, 'playlist_track_train.csv'),
+                'playlists': join(out_root, "full", 'playlist_hash.csv'),
+                'tracks': join(out_root, "full", 'track_hash.csv'),
+                'train': join(out_root, "full", 'playlist_track_train.csv'),
                 'challenge_set': challengeset_fn
             },
             'output': './data/wrmf_titlernn_spotif_ai.csv'
@@ -109,6 +124,14 @@ def main(data_root, challengeset_fn, out_root, n_factors=10):
     with tempfile.NamedTemporaryFile(suffix='.json') as tmpf:
         json.dump(prep_conf, open(tmpf.name, 'w'))
         prepare_submission(tmpf.name)
+
+    # verify if the submission file is valid
+    errors = verify_submission(challengeset_fn, prep_conf['path']['output'])
+    assert errors == 0
+
+    print('>>>>>> All process finished!!')
+    print
+    print
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ After the cloning, you need to get into the directory, to install and fire up th
 
 ```
 $cd recsys18-spotify-spotif-ai
-$(sudo) pipenv install
+$pipenv install
 ```
 
 If your main python version is python3.X, make sure install this repo with python2.X option.
