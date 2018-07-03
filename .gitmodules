@@ -1,6 +1,3 @@
-[submodule "wmf"]
-	path = wmf
-	url = http://github.com/eldrin/wmf.git
 [submodule "RecsysChallengeTools"]
 	path = RecsysChallengeTools
 	url = https://github.com/eldrin/RecsysChallengeTools.git
