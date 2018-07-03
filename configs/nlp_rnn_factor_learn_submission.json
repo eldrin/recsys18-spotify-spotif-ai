@@ -1,0 +1,50 @@
+{
+    "path":{
+        "embeddings":{
+            "U": "/mnt/recsys_models/wrmf_U.npy",
+            "V": "/mnt/recsys_models/wrmf_V.npy"
+        },
+        "data":{
+            "playlists": "/mnt/recsys_models/subset/playlist_hash_ss.csv",
+            "tracks": "/mnt/recsys_models/subset/track_hash_ss.csv",
+            "artists": "/mnt/recsys_models/subset/artist_hash_ss.csv",
+            "train": "/mnt/recsys_models/subset/playlist_track_ss_train.csv",
+            "test": "/mnt/recsys_models/subset/playlist_track_ss_test.csv",
+            "artist2track": "/mnt/recsys_models/subset/artist_track_ss.csv"
+        },
+        "model_out": {
+            "U": "/mnt/recsys_models/titlernn10_U_ss.npy",
+            "V": "/mnt/recsys_models/titlernn10_V_ss.npy",
+	    "rnn": "/mnt/recsys_models/rnn_checkpoint.pth.tar"
+        },
+        "log_out": "./logs/"
+    },
+
+    "hyper_parameters":{
+	"early_stop": true,
+	"use_gpu": false,
+        "eval_while_fit": true,
+        "sample_weight": false,
+        "sample_weight_power": 0.75,
+        "sample_threshold": 1e-6,
+        "with_context": false,
+        "num_epochs": 100,
+        "neg_sample": 4,
+        "track_emb": "artist_ngram",
+        "loss": "all",
+        "learn_rate": 0.01,
+        "batch_size": 1024,
+        "n_embedding": 300,
+        "n_out_embedding": 1000,
+        "n_hid": 1000,
+        "n_layers": 1,
+	"drop_out": 0,
+        "l2": 1e-4,
+        "alpha": 0,
+        "ngram_n": 3
+    },
+
+    "evaluation":{
+        "cutoff":500
+    }
+}

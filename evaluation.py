@@ -4,7 +4,7 @@ from functools import partial
 import numpy as np
 import pandas as pd
 
-from cf import ImplicitALS
+from model import ImplicitALS
 from tqdm import tqdm
 import fire
 

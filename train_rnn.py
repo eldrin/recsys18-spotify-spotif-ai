@@ -308,7 +308,7 @@ def main(config_fn):
     checkpoint = {
         'epoch': n, 'updates': k,
         'state_dict': model.state_dict(),
-        'optimizer': opt.state_dict(),
+        # 'optimizer': opt.state_dict(),  # TODO
         'uniq_ngram': uniq_ngrams_pl
     }
     torch.save(checkpoint, CONFIG['path']['model_out']['rnn'])

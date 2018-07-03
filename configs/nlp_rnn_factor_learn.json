@@ -1,0 +1,52 @@
+{
+    "path":{
+        "embeddings":{
+            "U": "/mnt/recsys_models/wrmf_U.npy",
+            "V": "/mnt/recsys_models/wrmf_V.npy",
+            "track_word": "./data/w_emb_skipgram_track_ttl_gensim.npy",
+            "track_id2word": "./data/track_id2word.pkl"
+        },
+        "data":{
+            "playlists": "/mnt/recsys_models/subset/playlist_hash_ss.csv",
+            "tracks": "/mnt/recsys_models/subset/track_hash_ss.csv",
+            "artists": "/mnt/recsys_models/subset/artist_hash_ss.csv",
+            "train": "/mnt/recsys_models/subset/playlist_track_ss_train.csv",
+            "test": "/mnt/recsys_models/subset/playlist_track_ss_test.csv",
+            "artist2track": "/mnt/recsys_models/subset/artist_track_ss.csv"
+        },
+        "model_out": {
+            "U": "/mnt/recsys_models/titlernn10_U_ss.npy",
+            "V": "/mnt/recsys_models/titlernn10_V_ss.npy",
+	    "rnn": "/mnt/recsys_models/rnn_checkpoint.pth.tar"
+        },
+        "log_out": "./logs/"
+    },
+
+    "hyper_parameters":{
+	"early_stop": false,
+	"use_gpu": false,
+        "eval_while_fit": true,
+        "sample_weight": false,
+        "sample_weight_power": 0.75,
+        "sample_threshold": 1e-6,
+        "with_context": false,
+        "num_epochs": 100,
+        "neg_sample": 4,
+        "track_emb": "artist_ngram",
+        "loss": "SGNS",
+        "learn_rate": 0.01,
+        "batch_size": 1024,
+        "n_embedding": 50,
+        "n_out_embedding": 10,
+        "n_hid": 10,
+        "n_layers": 2,
+	"drop_out": 0,
+        "l2": 1e-7,
+        "alpha": 0,
+        "ngram_n": 3
+    },
+
+    "evaluation":{
+        "cutoff":500
+    }
+}

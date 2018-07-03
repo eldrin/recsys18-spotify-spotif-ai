@@ -6,22 +6,13 @@ from util import read_data
 import fire
 
 
-def main(mf_user_factors_fn, rnn_user_factors_fn, out_fn, train_fn, test_fn=None):
+def main(mf_user_factors_fn, rnn_user_factors_fn, out_fn, train_fn):
     """"""
     # load train data
     print('Loading data...')
     y = pd.read_csv(
         train_fn, header=None, index_col=None,
         names=['playlist', 'track', 'value'])
-
-    # check and load test data (if it exists)
-    if test_fn is not None:
-        if os.path.exists(test_fn):
-            yt = pd.read_csv(
-                test_fn, header=None, index_col=None,
-                names['playlist', 'track', 'value'])
-        else:
-            raise ValueError('[ERROR] {} is not existing!'.format(test_fn))
 
     # identify the part where needs to be replaced
     replace_ix = y[y['value'] == 0]['playlist'].unique()
