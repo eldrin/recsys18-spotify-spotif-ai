@@ -1,6 +1,9 @@
 import os
-import tempfile
 from os.path import join
+
+import json
+import tempfile
+
 from data import DataPrepper
 from pretrain_cf import main as pretrain_cf
 from train_rnn import main as train_rnn
@@ -13,7 +16,9 @@ import fire
 def main(data_root, challengeset_fn, out_root, n_factors=10):
     """"""
     print('>>> 1. Processing dataset!...')
-    data = DataPrepper().process(data_root, out_root, challengeset_fn)
+    # only process fullset (we don't need subset now)
+    data = (DataPrepper(subset=False)
+            .process(data_root, out_root, challengeset_fn))
 
     print('>>> 2. Pre-training MF (WRMF) model!...')
     pretrain_cf(
@@ -43,13 +48,13 @@ def main(data_root, challengeset_fn, out_root, n_factors=10):
             }
         },
         'hyper_parameters':{
-            "early_stop": true,
-            "use_gpu": false,
-            "eval_while_fit": true,
-            "sample_weight": false,
+            "early_stop": True,
+            "use_gpu": False,
+            "eval_while_fit": True,
+            "sample_weight": False,
             "sample_weight_power": 0.75,
             "sample_threshold": 1e-6,
-            "with_context": false,
+            "with_context": False,
             "num_epochs": 100,
             "neg_sample": 4,
             "track_emb": "artist_ngram",
@@ -67,7 +72,7 @@ def main(data_root, challengeset_fn, out_root, n_factors=10):
         },
     }
     with tempfile.NamedTemporaryFile(suffix='.json') as tmpf:
-        json.dump(open(tmpf.name, 'w'))
+        json.dump(rnn_conf, open(tmpf.name, 'w'))
         train_rnn(tmpf.name)
 
     # 4. post process (merge two playlist factors (mf/rnn))
@@ -102,7 +107,7 @@ def main(data_root, challengeset_fn, out_root, n_factors=10):
         }
     }
     with tempfile.NamedTemporaryFile(suffix='.json') as tmpf:
-        json.dump(open(tmpf.name, 'w'))
+        json.dump(prep_conf, open(tmpf.name, 'w'))
         prepare_submission(tmpf.name)
 
 
