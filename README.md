@@ -55,8 +55,16 @@ With all the dependencies installed correctly, you can now reproduce the result,
 $python reproduce.py /where/you/decompress/mpd/dataset/ /path/to/challenge_set.json /path/to/dump/outputs/
 ```
 
+If you're interested in use of gpu for the `rnn` training, you can simple put a flag for that
+
+```
+$python reproduce.py /where/you/decompress/mpd/dataset/ /path/to/challenge_set.json /path/to/dump/outputs/ --use-gpu=True
+```
+
+After running this script, it'll dump the submission file (.csv) in `./data/`.
+
 
 ## TODOs
 - [x] ~generate readme~
 - [ ] provide a script (or notebook) for quick run of the program
-- [ ] finish the `README.md` (with proper explanation for everything)
+- [x] ~finish the `README.md` (with proper explanation for everything)~

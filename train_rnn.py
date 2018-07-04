@@ -133,14 +133,18 @@ def main(config_fn):
     losses = []
     try:
         epoch = trange(HP['num_epochs'], ncols=80)
+        stop = False
+        k = 0
         for n in epoch:
-            k = 0
+            if stop:
+                break
             for batch in sampler.generator():
                 k += 1
                 # arbitrary early stop used for fast training
                 # NOTE: only works with 'all' loss
                 if EARLY_STOP:
                     if k > EARLY_STOP_K:
+                        stop = False
                         break
 
                 # parse in / out

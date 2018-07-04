@@ -72,7 +72,6 @@ def main(data_root, challengeset_fn, out_root, n_factors=10, use_gpu=False):
             "with_context": False,
             "num_epochs": 100,
             "neg_sample": 4,
-            "track_emb": "artist_ngram",
             "loss": "all",
             "learn_rate": 0.005,
             "batch_size": 1024,
@@ -126,9 +125,12 @@ def main(data_root, challengeset_fn, out_root, n_factors=10, use_gpu=False):
         prepare_submission(tmpf.name)
 
     # verify if the submission file is valid
+    print('>>>>>> verifying submission file...')
     errors = verify_submission(challengeset_fn, prep_conf['path']['output'])
     assert errors == 0
+    print('>>>>>>>>> No errors found!...')
 
+    print
     print('>>>>>> All process finished!!')
     print
     print
