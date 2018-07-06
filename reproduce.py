@@ -41,7 +41,7 @@ def main(data_root, challengeset_fn, out_root, n_factors=1000, use_gpu=False):
         model_name=mf_name
     )
 
-    # print('>>> 3. Training RNN (Char-Ngram-LSTM) model!...')
+    print('>>> 3. Training RNN (Char-Ngram-LSTM) model!...')
     # > build tmp config
     rnn_conf = {
         'path':{
