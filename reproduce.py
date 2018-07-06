@@ -22,7 +22,7 @@ RNN_MODEL_NAME = 'titlernn{:d}'
 MFRNN_PLAYLIST_MODEL_NAME = 'mf_rnn{:d}'
 
 
-def main(data_root, challengeset_fn, out_root, n_factors=10, use_gpu=False):
+def main(data_root, challengeset_fn, out_root, n_factors=1000, use_gpu=False):
     """"""
     # setup model names
     mf_name = MF_MODEL_NAME.format(n_factors)
