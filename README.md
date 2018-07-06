@@ -52,13 +52,13 @@ Now you're good to go!
 With all the dependencies installed correctly, you can now reproduce the result, simply by hitting the command below.
 
 ```
-$python reproduce.py /where/you/decompress/mpd/dataset/ /path/to/challenge_set.json /path/to/dump/outputs/
+$python reproduce.py /where/you/decompress/mpd/dataset/ /path/to/challenge_set.json /path/to/dump/outputs/ --n-factors=1000
 ```
 
 If you're interested in use of gpu for the `rnn` training, you can simple put a flag for that
 
 ```
-$python reproduce.py /where/you/decompress/mpd/dataset/ /path/to/challenge_set.json /path/to/dump/outputs/ --use-gpu=True
+$python reproduce.py /where/you/decompress/mpd/dataset/ /path/to/challenge_set.json /path/to/dump/outputs/ --n-factors=1000 --use-gpu=True
 ```
 
 After running this script, it'll dump the submission file (.csv) in `./data/`.
