@@ -144,7 +144,7 @@ def main(config_fn):
                 # NOTE: only works with 'all' loss
                 if EARLY_STOP:
                     if k > EARLY_STOP_K:
-                        stop = False
+                        stop = True
                         break
 
                 # parse in / out
@@ -247,10 +247,10 @@ def main(config_fn):
         Q = track_factors.weight.data.numpy()
     else:
         Q = track_factors
-    np.save(CONFIG['path']['model_out']['V'], Q)
-    del track_factors, Q
-    Q = np.load(
-        CONFIG['path']['model_out']['V'], mmap_mode='r')
+    # np.save(CONFIG['path']['model_out']['V'], Q)
+    # del track_factors, Q
+    # Q = np.load(
+    #     CONFIG['path']['model_out']['V'], mmap_mode='r')
     """"""
 
     #   1.2) ext playlist factors
