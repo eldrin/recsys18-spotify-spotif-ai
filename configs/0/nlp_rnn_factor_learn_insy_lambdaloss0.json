@@ -1,0 +1,51 @@
+{
+    "path":{
+        "embeddings":{
+            "U": "/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/ss/0/models/wrmf1k_U.npy",
+            "V": "/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/ss/0/models/wrmf1k_V.npy"
+        },
+        "data":{
+            "playlists": "/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/ss/0/playlist_hash_ss.csv",
+            "tracks": "/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/ss/0/track_hash_ss.csv",
+            "artists": "/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/ss/0/artist_hash_ss.csv",
+            "train": "/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/ss/0/playlist_track_ss_train.csv",
+            "test": "/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/ss/0/playlist_track_ss_test.csv",
+            "artist2track": "/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/ss/0/artist_track_ss.csv"
+        },
+        "model_out": {
+            "U": "/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/models/0/titlernn1k_U_ss_lambda_loss0.npy",
+	        "rnn": "/tudelft.net/staff-bulk/ewi/insy/MMC/jaykim/datasets/recsys18/models/0_rnn_checkpoint_lambda_loss0.pth.tar"
+        },
+        "log_out": "./logs/"
+    },
+
+    "hyper_parameters":{
+	    "early_stop": true,
+	    "use_gpu": true,
+        "eval_while_fit": true,
+        "sample_weight": false,
+        "sample_weight_power": 0.75,
+        "sample_threshold": 1e-6,
+        "with_context": false,
+        "num_epochs": 100,
+        "neg_sample": 4,
+        "track_emb": "artist_ngram",
+        "loss": "all",
+        "learn_rate": 0.0005,
+        "batch_size": 1024,
+        "n_embedding": 300,
+        "n_out_embedding": 1000,
+        "n_hid": 1000,
+        "n_layers": 1,
+	    "drop_out": 0,
+        "l2": 1e-4,
+        "alpha": 0,
+        "lambda_loss": 0,
+        "ngram_n": 3,
+        "report_every": 2000
+    },
+
+    "evaluation":{
+        "cutoff":500
+    }
+}

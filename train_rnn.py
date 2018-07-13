@@ -28,7 +28,91 @@ from tqdm import tqdm, trange
 import fire
 
 
-EARLY_STOP_K = 20000
+# EARLY_STOP_K = 20000
+EARLY_STOP_K = 50000
+
+def _evaluate(yt_tracks, y_tracks, sampler, model,
+              track_factors, uniq_playlists, playlist_dict,
+              config, use_gpu, save_playlist_factors, subsampling=None,
+              verbose=False):
+    """"""
+    if sampler.test is not None:
+        # switch off to evaluation mode
+        model.eval()
+
+        # 1) extract playlist / track factors first from embedding-rnn blocks
+        #   1.1) ext item factors first
+        """"""
+        if config['hyper_parameters']['loss'] == 'SGNS':
+            Q = track_factors.weight.data.numpy()
+        else:
+            Q = track_factors
+        """"""
+
+        #   1.2) ext playlist factors
+        b = 500
+        n = uniq_playlists.shape[0]
+        pid = range(n)
+        P = []
+        for j in trange(0, n+(n%b), b, ncols=80):
+            if j > n:
+                continue
+            pid_ = [playlist_dict[jj] for jj in pid[j:j+b]]
+            if use_gpu:
+                P.append(model.user_factor(pid_).data.cpu().numpy())
+            else:
+                P.append(model.user_factor(pid_).data.numpy())
+
+        P = np.concatenate(P, axis=0).astype(np.float32)
+        if save_playlist_factors:
+            np.save(config['path']['model_out']['U'], P)
+            del P
+            P = np.load(
+                config['path']['model_out']['U'], mmap_mode='r')
+
+        print('Evaluate!')
+        # fetch testing playlists
+        y, yt = sampler.train, sampler.test
+        trg_u = yt['playlist'].unique()
+        if subsampling is not None and isinstance(subsampling, (int, float)):
+            trg_u = np.random.choice(trg_u, subsampling, False)
+
+        #   2) calculate scores using the same way of MLP case
+        rprec = []
+        click = []
+        ndcg = []
+        for j, u in tqdm(enumerate(trg_u), total=len(trg_u), ncols=80):
+            true_ts = yt_tracks.loc[u]
+            if u in y_tracks.index:
+                true_tr = y_tracks.loc[u]
+            else:
+                true_tr = set()
+
+            # predict k
+            pred = -P[u].dot(Q.T)
+            ind = np.argpartition(pred, 650)[:650]
+            ind = ind[pred[ind].argsort()]
+
+            # exclude training data
+            pred = filter(lambda x: x not in true_tr, ind)[:500]
+
+            rprec.append(r_precision(true_ts, pred))
+            click.append(playlist_extender_clicks(true_ts, pred))
+            ndcg.append(NDCG(true_ts, pred))
+        rprec = np.mean(filter(lambda r: r is not None, rprec))
+        click = np.mean(filter(lambda r: r is not None, click))
+        ndcg = np.mean(filter(lambda r: r is not None, ndcg))
+
+        if verbose:
+            print('R Precision: {:.4f}'.format(rprec))
+            print('Clicks: {:.4f}'.format(click))
+            print('NDCG: {:.4f}'.format(ndcg))
+
+        model.train()
+
+        return rprec, click, ndcg
+    else:
+        return None, None, None
 
 
 def main(config_fn):
@@ -61,6 +145,10 @@ def main(config_fn):
 
     # prepare model instances
     sampler = MPDSampler(CONFIG, verbose=True)
+    # caching relavant dictionary
+    y, yt = sampler.train, sampler.test
+    yt_tracks = yt.groupby('playlist')['track'].apply(list)
+    y_tracks = y[y['value']==1].groupby('playlist')['track'].apply(set)
     model = UserRNN(
         n_components=HP['n_embedding'],
         n_users=len(uniq_ngrams_pl),
@@ -101,7 +189,7 @@ def main(config_fn):
             CONFIG['path']['embeddings']['V']).astype(np.float32)
 
         # setup total loss
-        f_loss = SGNSMSE()
+        f_loss = SGNSMSE(HP['lambda_loss'])
 
     sprs_prms = map(
         lambda x: x[1],
@@ -131,21 +219,28 @@ def main(config_fn):
     # main training loop
     model.train()
     losses = []
+    metrics = []
     try:
         epoch = trange(HP['num_epochs'], ncols=80)
         stop = False
-        k = 0
         for n in epoch:
             if stop:
                 break
+
             for batch in sampler.generator():
-                k += 1
                 # arbitrary early stop used for fast training
                 # NOTE: only works with 'all' loss
                 if EARLY_STOP:
-                    if k > EARLY_STOP_K:
+                    if len(losses) > EARLY_STOP_K:
                         stop = True
                         break
+
+                if len(losses) % HP['report_every'] == 0:
+                    metrics.append(_evaluate(
+                        yt_tracks, y_tracks, sampler, model, track_factors,
+                        uniq_playlists, playlist_dict, CONFIG, USE_GPU,
+                        save_playlist_factors=False, subsampling=100,
+                        verbose=False))
 
                 # parse in / out
                 pid_ = [x[0] for x in batch]  # (n_batch,)
@@ -237,86 +332,26 @@ def main(config_fn):
 
     except KeyboardInterrupt:
         print('[Warning] User stopped the training!')
-    # switch off to evaluation mode
-    model.eval()
 
-    # 1) extract playlist / track factors first from embedding-rnn blocks
-    #   1.1) ext item factors first
-    """"""
-    if HP['loss'] == 'SGNS':
-        Q = track_factors.weight.data.numpy()
-    else:
-        Q = track_factors
-    # np.save(CONFIG['path']['model_out']['V'], Q)
-    # del track_factors, Q
-    # Q = np.load(
-    #     CONFIG['path']['model_out']['V'], mmap_mode='r')
-    """"""
-
-    #   1.2) ext playlist factors
-    b = 500
-    n = uniq_playlists.shape[0]
-    pid = range(n)
-    P = []
-    for j in trange(0, n+(n%b), b, ncols=80):
-        if j > n:
-            continue
-        pid_ = [playlist_dict[jj] for jj in pid[j:j+b]]
-        if USE_GPU:
-            P.append(model.user_factor(pid_).data.cpu().numpy())
-        else:
-            P.append(model.user_factor(pid_).data.numpy())
-
-    P = np.concatenate(P, axis=0).astype(np.float32)
-    np.save(CONFIG['path']['model_out']['U'], P)
-    del P
-    P = np.load(
-        CONFIG['path']['model_out']['U'], mmap_mode='r')
-
-    if sampler.test is not None:
-        print('Evaluate!')
-        # fetch testing playlists
-        y, yt = sampler.train, sampler.test
-        trg_u = yt['playlist'].unique()
-        yt_tracks = yt.groupby('playlist')['track'].apply(list)
-        y_tracks = y[y['value']==1].groupby('playlist')['track'].apply(set)
-
-        #   2) calculate scores using the same way of MLP case
-        rprec = []
-        ndcg = []
-        for j, u in tqdm(enumerate(trg_u), total=len(trg_u), ncols=80):
-            true_ts = yt_tracks.loc[u]
-            if u in y_tracks.index:
-                true_tr = y_tracks.loc[u]
-            else:
-                true_tr = set()
-
-            # predict k
-            pred = -P[u].dot(Q.T)
-            ind = np.argpartition(pred, 650)[:650]
-            ind = ind[pred[ind].argsort()]
-
-            # exclude training data
-            pred = filter(lambda x: x not in true_tr, ind)[:500]
-
-            rprec.append(r_precision(true_ts, pred))
-            ndcg.append(NDCG(true_ts, pred))
-        rprec = filter(lambda r: r is not None, rprec)
-        ndcg = filter(lambda r: r is not None, ndcg)
-
-        print('R Precision: {:.4f}'.format(np.mean(rprec)))
-        print('NDCG: {:.4f}'.format(np.mean(ndcg)))
+    final_result = _evaluate(
+        yt_tracks, y_tracks, sampler, model,
+        track_factors, uniq_playlists, playlist_dict,
+        CONFIG, USE_GPU, save_playlist_factors=True, verbose=True
+    )
 
     # 3) print out the loss evolution as a image
-    plt.plot(losses)
-    plt.savefig('./data/losses.png')
+    # plt.plot(losses)
+    # plt.savefig('./data/losses.png')
 
     # 4) dump the rnn model / ngram dict
     checkpoint = {
-        'epoch': n, 'updates': k,
-        'state_dict': model.state_dict(),
+        'epoch': n, 'updates': len(losses),
+        'state_dict': model.cpu().state_dict(),
         # 'optimizer': opt.state_dict(),  # TODO
-        'uniq_ngram': uniq_ngrams_pl
+        'uniq_ngram': uniq_ngrams_pl,
+        'results': metrics,
+        'final_results': final_result,
+        'losses': losses
     }
     torch.save(checkpoint, CONFIG['path']['model_out']['rnn'])
 
