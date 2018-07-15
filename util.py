@@ -81,6 +81,10 @@ class BaseMF:
     """"""
     def __init__(self, P, Q, importance=1, logistic=False, name='MF', **kwargs):
         """"""
+        # fill the 0 if there are
+        zero_ix = P.sum(axis=1) == 0
+        P[zero_ix] = np.random.randn(*P[zero_ix].shape) * 0.01
+
         self.P = P
         self.Q = Q
         self.logistic = logistic
