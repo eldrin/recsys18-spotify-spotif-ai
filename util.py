@@ -147,7 +147,7 @@ def load_libfm_model(model_fn, verbose=False):
         if verbose:
             iterator = tqdm(f, total=bounds[2]*2 - 3, ncols=80)
         else:
-            iteratlr = f
+            iterator = f
 
         for line in iterator:
             if i == bounds[0] + 1:
