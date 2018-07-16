@@ -185,6 +185,6 @@ def libfm2uv(libfm_model_fn, n_users, n_items):
 
 def convert_libfm_model_n_save(libfm_model_fn, n_users, n_items, out_fn_U, out_fn_V):
     """"""
-    U, V = libfm2uv(libfm_model_fn, n_usres, n_items)
+    U, V = libfm2uv(libfm_model_fn, n_users, n_items)
     np.save(out_fn_U, U)
     np.save(out_fn_V, V)
