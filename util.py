@@ -178,7 +178,7 @@ def libfm2uv(libfm_model_fn, n_users, n_items):
     factors_i = w2[n_users:]
 
     U = np.c_[factors_u, bias_u, np.ones(bias_u.shape)]
-    V = np.c_[factors_i, bias_i, np.ones(bias_i.shape)]
+    V = np.c_[factors_i, np.ones(bias_i.shape), bias_i]
 
     return U.astype(np.float32), V.astype(np.float32)
 
