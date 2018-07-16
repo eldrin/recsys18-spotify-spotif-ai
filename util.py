@@ -125,3 +125,66 @@ def load_checkpoint(model, checkpoint_fn):
     checkpoint = torch.load(checkoint_fn)
     model.eval()
     model.load_state_dict(checkpoint['sate_dict'])
+
+
+def load_libfm_model(model_fn, verbose=False):
+    """"""
+    # preprocessing
+    with open(model_fn) as f:
+        i = 0
+        bounds = []
+        for line in f:
+            if line[0] == '#':
+                bounds.append(i)
+            i+=1
+
+    # main processing loop
+    w0 = 0
+    w1 = []
+    w2 = []
+    with open(model_fn) as f:
+        i = 0
+        if verbose:
+            iterator = tqdm(f, total=bounds[2]*2 - 3, ncols=80)
+        else:
+            iteratlr = f
+
+        for line in iterator:
+            if i == bounds[0] + 1:
+                w0 = np.float32(line.replace('\n', ''))
+            elif i > bounds[1] and i < bounds[2]:
+                w1.append(np.float32(line.replace('\n', '')))
+            elif i > bounds[2]:
+                w2.append([np.float32(l)
+                           for l
+                           in line.replace('\n', '').split()])
+            i+=1
+
+    # post-processing: convert lists into numpy arrays
+    w1 = np.array(w1)
+    w2 = np.array(w2)
+
+    return w0, w1, w2
+
+
+def libfm2uv(libfm_model_fn, n_users, n_items):
+    """"""
+    w0, w1, w2 = load_libfm_model(libfm_model_fn)
+
+    # convert them into two matrices
+    bias_u = w1[:n_users]
+    bias_i = w1[n_users:]
+    factors_u = w2[:n_users]
+    factors_i = w2[n_users:]
+
+    U = np.c_[factors_u, bias_u, np.ones(bias_u.shape)]
+    V = np.c_[factors_i, bias_i, np.ones(bias_i.shape)]
+
+    return U.astype(np.float32), V.astype(np.float32)
+
+
+def convert_libfm_model_n_save(libfm_model_fn, out_fn_U, out_fn_V):
+    """"""
+    U, V = libfm2uv(libfm_model_fn)
+    np.save(out_fn_U, U)
+    np.save(out_fn_V, V)
