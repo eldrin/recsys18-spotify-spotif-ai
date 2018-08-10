@@ -146,8 +146,12 @@ def main(config_fn):
     # prepare model instances
     sampler = MPDSampler(CONFIG, verbose=True)
     # caching relavant dictionary
-    y, yt = sampler.train, sampler.test
-    yt_tracks = yt.groupby('playlist')['track'].apply(list)
+    if sampler.test is not None:
+        y, yt = sampler.train, sampler.test
+        yt_tracks = yt.groupby('playlist')['track'].apply(list)
+    else:
+        y = sampler.train
+
     y_tracks = y[y['value']==1].groupby('playlist')['track'].apply(set)
     model = UserRNN(
         n_components=HP['n_embedding'],
@@ -235,7 +239,7 @@ def main(config_fn):
                         stop = True
                         break
 
-                if len(losses) % HP['report_every'] == 0:
+                if sampler.test is not None and len(losses) % HP['report_every'] == 0:
                     metrics.append(_evaluate(
                         yt_tracks, y_tracks, sampler, model, track_factors,
                         uniq_playlists, playlist_dict, CONFIG, USE_GPU,
@@ -333,11 +337,15 @@ def main(config_fn):
     except KeyboardInterrupt:
         print('[Warning] User stopped the training!')
 
-    final_result = _evaluate(
-        yt_tracks, y_tracks, sampler, model,
-        track_factors, uniq_playlists, playlist_dict,
-        CONFIG, USE_GPU, save_playlist_factors=True, verbose=True
-    )
+
+    if sampler.test is not None:
+        final_result = _evaluate(
+            yt_tracks, y_tracks, sampler, model,
+            track_factors, uniq_playlists, playlist_dict,
+            CONFIG, USE_GPU, save_playlist_factors=True, verbose=True
+        )
+    else:
+        final_result = None
 
     # 3) print out the loss evolution as a image
     # plt.plot(losses)
