@@ -31,6 +31,14 @@ class ImplicitALS(AlternatingLeastSquares):
         super(ImplicitALS, self).fit(X.T)
         os.environ['OPENBLAS_NUM_THREADS'] = '8'
 
+        # fill the zero factors with random values ~ N(0, 0.01)
+        user_zeros = (np.sum(self.user_factors, axis=1) == 0)
+        self.user_factors[user_zeros] = (
+            np.random.randn(user_zeros.sum(), self.factors) * 0.01)
+        item_zeros = (np.sum(self.item_factors, axis=1) == 0)
+        self.item_factors[item_zeros] = (
+            np.random.randn(item_zeros.sum(), self.factors) * 0.01)
+
     def predict_k(self, u, k=500):
         """"""
         if not hasattr(self, 'user_factors') or not hasattr(self, 'item_factors'):
