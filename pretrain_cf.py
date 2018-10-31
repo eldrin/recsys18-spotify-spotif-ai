@@ -10,10 +10,11 @@ import fire
 
 
 def main(train_fn, test_fn=None, r=10, alpha=100, n_epoch=15, beta=1e-3,
-         cutoff=500, model_out_root=None, model_name='wrmf'):
+         cutoff=500, n_user_items=None, model_out_root=None,
+         model_name='wrmf'):
     """"""
     print('Loading data...')
-    d, y = read_data(train_fn)
+    d, y = read_data(train_fn, shape=n_user_items)
     if test_fn is not None:
         dt, yt = read_data(test_fn, shape=d.shape)
 

@@ -23,13 +23,13 @@ class ImplicitALS(AlternatingLeastSquares):
             factors=n_components, regularization=regularization,
             use_gpu=use_gpu, iterations=n_iters, dtype=np.float32
         )
-	self.alpha = alpha
+        self.alpha = alpha
 
     def fit(self, X):
-	os.environ['OPENBLAS_NUM_THREADS'] = '1'
+        os.environ['OPENBLAS_NUM_THREADS'] = '1'
         X.data = X.data * (self.alpha - 1.)
         super(ImplicitALS, self).fit(X.T)
-	os.environ['OPENBLAS_NUM_THREADS'] = '8'
+        os.environ['OPENBLAS_NUM_THREADS'] = '8'
 
     def predict_k(self, u, k=500):
         """"""
